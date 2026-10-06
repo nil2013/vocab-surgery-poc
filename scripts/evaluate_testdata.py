@@ -103,6 +103,20 @@ def paired_changes(before, after):
     return result
 
 
+def load_baseline(directory, environment, expected_keys, benchmark_cases):
+    previous = json.loads((directory / "environment.json").read_text())
+    for key in ["source", "pruned", "manifestSha256", "testDataRevision", "inputHashes", "server", "packageVersions",
+                "replaySamples", "benchmarkTrials", "benchmarkWarmups", "concurrency"]:
+        if previous[key] != environment[key]:
+            raise ValueError("baseline provenance differs: " + key)
+    if json.loads((directory / "benchmark-cases.json").read_text()) != benchmark_cases:
+        raise ValueError("baseline benchmark inputs differ")
+    rows = [json.loads(line) for line in (directory / "baseline.jsonl").read_text().splitlines()]
+    if [(row["group"], row["id"], row["sample"]) for row in rows] != expected_keys:
+        raise ValueError("baseline coverage differs; cannot reuse partial results")
+    return rows
+
+
 def summarize_phase(records):
     synthetic = [row for row in records if row["group"] == "synthetic"]
     replay = [row for row in records if row["group"] == "replay"]
@@ -153,13 +167,14 @@ def run(args):
     inventory = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in source_paths}
     revision = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     versions = {name: importlib.metadata.version(name) for name in ["omlx", "mlx", "mlx-lm", "tokenizers", "transformers"]}
-    write_json(output / "environment.json", {"source": manifest["source"], "pruned": manifest["modelOutput"],
+    environment = {"source": manifest["source"], "pruned": manifest["modelOutput"],
                "manifestSha256": hashlib.sha256(args.manifest.read_bytes()).hexdigest(),
                "verificationReport": str(args.verification_report.resolve()), "testDataRevision": revision,
                "inputHashes": inventory, "server": server, "packageVersions": versions,
                "replaySamples": args.samples, "benchmarkTrials": args.trials, "benchmarkWarmups": args.warmups,
                "concurrency": 1, "qualityState": "pending-human-review",
-               "metricsNote": "test-data JIS/context leak metric, not the surgery ICU policy predicate"})
+               "metricsNote": "test-data JIS/context leak metric, not the surgery ICU policy predicate"}
+    write_json(output / "environment.json", environment)
     write_json(output / "synthetic-suite.json", suite)
     write_json(output / "replay-cases.json", replay)
     benchmark_cases = [json.loads(line) for line in args.benchmark_suite.read_text().splitlines() if line.strip()]
@@ -195,10 +210,24 @@ def run(args):
         client.unload(model)
     phases, memories = [], {}
     for phase, model in zip(["baseline", "pruned"], models):
+        if phase == "baseline" and args.baseline_results is not None:
+            expected_keys = [("benchmark", case["id"], trial) for case in benchmark_cases for trial in range(args.trials)]
+            expected_keys += [(group, case["id"], seed) for group, case, seed in jobs]
+            records = load_baseline(args.baseline_results, environment, expected_keys, benchmark_cases)
+            with (output / "baseline.jsonl").open("x", encoding="utf-8") as stream:
+                stream.write((args.baseline_results / "baseline.jsonl").read_text())
+            write_json(output / "baseline-provenance.json", {"directory": str(args.baseline_results.resolve()),
+                       "sha256": hashlib.sha256((args.baseline_results / "baseline.jsonl").read_bytes()).hexdigest()})
+            memory = args.baseline_results / "baseline-memory.json"
+            memories[phase] = json.loads(memory.read_text()) if memory.exists() else {"peakSampledRssBytes": None, "reason": "prior attempt did not save phase memory"}
+            phases.append(records)
+            print("Reused complete baseline with matching inputs and server provenance", flush=True)
+            continue
         records = []
         sampler = RssSampler(server["pid"])
         sampler.start()
         try:
+            client.load(model)
             with (output / f"{phase}.jsonl").open("x", encoding="utf-8") as stream:
                 def record(row):
                     records.append(row)
@@ -244,6 +273,7 @@ def run(args):
         finally:
             sampler.finish()
             memories[phase] = {"peakSampledRssBytes": sampler.peak, "sampleIntervalSeconds": .25}
+            write_json(output / f"{phase}-memory.json", memories[phase])
             client.unload(model)
         phases.append(records)
     metrics = {"phases": {phase: summarize_phase(records) for phase, records in zip(["baseline", "pruned"], phases)},
@@ -265,6 +295,7 @@ def main():
     parser.add_argument("--samples", type=int, default=2)
     parser.add_argument("--trials", type=int, default=5)
     parser.add_argument("--warmups", type=int, default=1)
+    parser.add_argument("--baseline-results", type=Path, help="Reuse a complete baseline only when inputs and server provenance match")
     run(parser.parse_args())
 
 

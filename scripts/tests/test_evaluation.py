@@ -10,6 +10,8 @@ import unittest
 from pathlib import Path
 import sys
 import subprocess
+import urllib.error
+from unittest.mock import Mock, patch
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
@@ -122,6 +124,21 @@ class EvaluationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 evaluate.Omlx("http://localhost").stream("model", case, top_p=top_p)
 
+    def test_model_loading_retries_only_memory_admission_failures(self):
+        client = evaluate.Omlx("http://localhost")
+        memory_error = urllib.error.HTTPError("http://localhost", 507, "memory", {}, None)
+        client.json = Mock(side_effect=[memory_error, {"status": "ok"}])
+        with patch("evaluate.time.sleep") as sleep:
+            self.assertEqual(client.load("pruned"), {"status": "ok"})
+            sleep.assert_called_once_with(1)
+        for code, settle in [(401, 20), (507, 0)]:
+            error = urllib.error.HTTPError("http://localhost", code, "error", {}, None)
+            client.json = Mock(side_effect=error)
+            with patch("evaluate.time.sleep") as sleep, self.assertRaises(urllib.error.HTTPError):
+                client.load("pruned", settle_seconds=settle)
+            sleep.assert_not_called()
+            error.close()
+
     @unittest.skipUnless(Path("test-data/cases/synthetic/suite.json").is_file(), "test-data submodule required")
     def test_testdata_inputs_and_fixed_scoring_contract(self):
         suite, replay, checks, metrics = evaluate_testdata.load_data(Path("test-data"))
@@ -160,6 +177,25 @@ class EvaluationTests(unittest.TestCase):
             messages[0]["tool_calls"][0]["function"]["arguments"] = arguments
             with self.assertRaises(ValueError):
                 evaluate_testdata.template_messages(messages)
+
+    def test_baseline_reuse_requires_full_coverage_and_matching_provenance(self):
+        keys = ["source", "pruned", "manifestSha256", "testDataRevision", "inputHashes", "server", "packageVersions",
+                "replaySamples", "benchmarkTrials", "benchmarkWarmups", "concurrency"]
+        environment = {key: "same" for key in keys}
+        expected = [("synthetic", "case", 0)]
+        rows = [{"group": "synthetic", "id": "case", "sample": 0}]
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "environment.json").write_text(json.dumps(environment))
+            (directory / "baseline.jsonl").write_text(json.dumps(rows[0]) + "\n")
+            (directory / "benchmark-cases.json").write_text("[]")
+            self.assertEqual(evaluate_testdata.load_baseline(directory, environment, expected, []), rows)
+            with self.assertRaises(ValueError):
+                evaluate_testdata.load_baseline(directory, {**environment, "manifestSha256": "different"}, expected, [])
+            with self.assertRaises(ValueError):
+                evaluate_testdata.load_baseline(directory, environment, expected * 2, [])
+            with self.assertRaises(ValueError):
+                evaluate_testdata.load_baseline(directory, environment, expected, [{"id": "changed"}])
 
     @unittest.skipUnless(Path("test-data/cases/synthetic/suite.json").is_file() and Path("/usr/bin/sandbox-exec").is_file(), "test-data and macOS sandbox required")
     def test_testdata_fixed_python_harness_runs_restricted_and_fails_wrong_code(self):

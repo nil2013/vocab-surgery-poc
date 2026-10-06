@@ -96,6 +96,8 @@ helper はケースと hash、submodule revision、server・package情報、全�
 
 `test-data` の leak は JIS X 0213 / Python Unicode と文脈内文字の除外による指標であり、surgery の ICU policy predicate とは別である。replay は `stop` かつ text がある応答だけを concluded として言語・混入を集計し、`tool_calls` / `length` を別に数える。合成の PASS は指定の文字一致・keywords・code harness 等の判定で、日本語品質の人による評価を代替しない。失敗時は部分 JSONL を保持して停止し、新しい出力先で再実行する。
 
+モデル切替直後に oMLX の dynamic memory ceiling が旧状況を参照して HTTP 507 を返す場合、明示 load を最大20秒、1秒間隔で再試行する。他の HTTP errors は再試行せず、memory guard の上限は変更しない。完了した baseline の後に失敗した場合は、新しい出力先で `--baseline-results <旧 comparison directory>` を指定できる。モデル・manifest hash・データ revision / hashes・server 情報・package versions・samples / trials / warmups が一致し、全 baseline 行の case / seed / group が揃っている場合だけコピーして再利用し、そのファイル hash と出所を記録する。部分 baseline は再利用しない。
+
 ## 2026-10-06 の実行確認
 
 固定 Qwen snapshot を 512 MiB JVM heap で加工し、K=128,803、全 1,891 tensors の byte 対応、payload 44,790,761,728 bytes、参照 tokenizer の検証に成功した。未対象の 7 shards は APFS clone。論理 model bytes は 44,855,965,826 → 44,795,576,221、payload 削減は 53,298,432 bytes。

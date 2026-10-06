@@ -81,6 +81,19 @@ class Omlx:
             if error.code != 400:
                 raise
 
+    def load(self, model, settle_seconds=20):
+        # oMLX's dynamic memory ceiling can lag a just-completed unload.
+        # Retry this admission failure only, without changing its memory guard.
+        deadline = time.monotonic() + settle_seconds
+        while True:
+            try:
+                return self.json("/models/" + urllib.parse.quote(model, safe="") + "/load", {})
+            except urllib.error.HTTPError as error:
+                if error.code != 507 or time.monotonic() >= deadline:
+                    raise
+                error.close()
+                time.sleep(1)
+
     def stream(self, model, case, temperature=0.0, seed=2026, messages=None, top_p=1.0, tool_choice=None):
         if top_p is not None and (not math.isfinite(top_p) or not 0 < top_p <= 1):
             raise ValueError("top_p must be in (0, 1]")
@@ -317,6 +330,7 @@ def run(args, logit_runner=logits.run):
         with phase_path.open("x", encoding="utf-8"):
             pass
         try:
+            client.load(name)
             for case in suite:
                 if case.get("benchmark"):
                     for _ in range(args.warmups):
