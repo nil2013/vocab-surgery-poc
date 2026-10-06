@@ -1,0 +1,16 @@
+# Local model cache and generated results
+/models
+/outputs/*
+!/outputs/SPEC.md
+
+# Scala and sbt build artifacts
+target/
+.bsp/
+.metals/
+.bloop/
+.scala-build/
+.scala-history
+
+# Local tooling and OS files
+.cache/
+.DS_Store
