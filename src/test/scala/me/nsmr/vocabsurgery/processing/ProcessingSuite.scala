@@ -17,40 +17,25 @@ class ProcessingSuite extends munit.FunSuite:
     val path = Path.of("synthetic-policy.json")
     val settings = PolicySettings()
     assertEquals(PolicySettings.parse(settings.json, path), settings)
-    Vector(Json.obj("oops" -> Json.True), Json.obj("formatVersion" -> Json.fromInt(3)),
+    Vector(Json.obj("oops" -> Json.True), Json.obj("formatVersion" -> Json.fromInt(2)),
       Json.obj("unicodeVersion" -> Json.fromString("16.0.0")), Json.obj("japaneseExtra" -> Json.arr(Json.fromInt(0xd800))),
       Json.obj("explicitForbidden" -> Json.arr(Json.fromInt(-1))), Json.obj("protectedIds" -> Json.arr(Json.fromInt(-1))),
       Json.obj("forbiddenScripts" -> Json.arr(Json.fromString("nonsense"))), Json.obj("unregisteredRows" -> Json.fromString("keep")),
       Json.obj("parameterCount" -> Json.fromString("infer")), Json.obj("pruneHanOutsideReference" -> Json.Null),
-      Json.obj("protectMath" -> Json.Null), Json.obj("protectMath" -> Json.fromString("true")),
-      Json.obj("formatVersion" -> Json.fromInt(1), "protectMath" -> Json.True))
+      Json.obj("protectMath" -> Json.Null), Json.obj("protectMath" -> Json.fromString("true")))
       .foreach(json => intercept[DataException](PolicySettings.parse(json, path)))
     intercept[DataException](PolicySettings.load(Path.of("nonexistent-policy.json")))
   }
 
-  test("policy v2 selects Math protection while v1 retains its exact representation and behavior") {
+  test("policy protects Math by default and records the switch") {
     val path = Path.of("policy.json")
     assert(PolicySettings.parse(Json.obj(), path).protectMath)
     val disabled = PolicySettings(protectMath = false)
     assertEquals(PolicySettings.parse(disabled.json, path), disabled)
-    val legacy = PolicySettings(protectMath = false, formatVersion = 1)
-    assertEquals(PolicySettings.parse(legacy.json, path), legacy)
-    assert(!legacy.json.hcursor.downField("protectMath").succeeded)
+    assertEquals(disabled.json.hcursor.get[Boolean]("protectMath"), Right(false))
     val reference = me.nsmr.vocabsurgery.kanji.JapaneseKanjiReference.fromCharacters(Set(CodePoint(0x65e5)))
     assert(PolicySettings().domain(reference).protectMath)
-    assert(!legacy.domain(reference).protectMath)
-    intercept[IllegalArgumentException](PolicySettings(formatVersion = 1))
-  }
-
-  test("recorded v1 plans and manifests remain valid without adopting new policy defaults") {
-    ProcessingFixtures.withModel { (_, input, output) =>
-      val options = ProcessingOptions(outputRoot = output, cloner = FileCloner.disabled)
-      val settings = PolicySettings(protectMath = false, formatVersion = 1)
-      val path = CheckpointProcessor.plan(input, kanji, settings, output.resolve("runs/legacy"), options)
-      assertEquals(PlanStore.loadVerified(path).settings.json, settings.json)
-      CheckpointProcessor.applyPlan(path, output.resolve("models/legacy"), ProcessingFixtures.reference, options)
-      assert(CheckpointProcessor.verifyManifest(path.getParent.resolve("manifest.json"), ProcessingFixtures.reference, options).reference.hcursor.get[Boolean]("passed").contains(true))
-    }
+    assert(!disabled.domain(reference).protectMath)
   }
 
   test("coding profile preserves Greek and Canadian Aboriginal and explicitly targets the five reviewed Han characters") {
@@ -83,7 +68,7 @@ class ProcessingSuite extends munit.FunSuite:
 
   test("apply and verify project exact packed rows with copy fallback and independent outputs") {
     ProcessingFixtures.withModel { (_, input, output) =>
-      val options = ProcessingOptions(outputRoot = output, cloner = FileCloner.disabled, bufferBytes = 7)
+      val options = ProcessingOptions(outputRoot = output, transfer = FileTransfer.copying(FileTransfer.platform), bufferBytes = 7)
       val path = CheckpointProcessor.plan(input, kanji, PolicySettings(), output.resolve("runs/apply"), options)
       val before = FileIO.sha256(input.resolve("input.safetensors"))
       val model = CheckpointProcessor.applyPlan(path, output.resolve("models/pruned"), ProcessingFixtures.reference, options)
@@ -108,7 +93,7 @@ class ProcessingSuite extends munit.FunSuite:
 
   test("insufficient space stops before staging; failed validation leaves diagnostics without publication") {
     ProcessingFixtures.withModel { (_, input, output) =>
-      val options = ProcessingOptions(outputRoot = output, cloner = FileCloner.disabled)
+      val options = ProcessingOptions(outputRoot = output, transfer = FileTransfer.copying(FileTransfer.platform))
       val path = CheckpointProcessor.plan(input, kanji, PolicySettings(), output.resolve("runs/failure"), options)
       val target = output.resolve("models/failed")
       intercept[DataException](CheckpointProcessor.applyPlan(path, target, ProcessingFixtures.reference, options.copy(availableBytes = _ => 0L)))
@@ -121,6 +106,41 @@ class ProcessingSuite extends munit.FunSuite:
         assertEquals(stages.size, 1)
         assert(Files.isRegularFile(stages.head.resolve("failure.json")))
       }
+    }
+  }
+
+  test("Flash-Next apply writes PLE token IDs and slow tokenizer files, and verification requires exactly the planned set") {
+    ProcessingFixtures.withSnapshot(DomainFixtures.flashNext()) { (_, input, output) =>
+      val options = ProcessingOptions(outputRoot = output, transfer = FileTransfer.copying(FileTransfer.platform))
+      val path = CheckpointProcessor.plan(input, kanji, PolicySettings(), output.resolve("runs/flash"), options)
+      val prepared = PlanStore.loadVerified(path)
+      val model = CheckpointProcessor.applyPlan(path, output.resolve("models/flash"), ProcessingFixtures.reference, options)
+      val table = me.nsmr.vocabsurgery.model.PleTokenIds.parse(JsonIO.read(model.resolve("ple-token-ids.json")))
+      assertEquals(table.originalTokenIds, prepared.domain.projection.compactToOriginal.map(_.intValue))
+      assertEquals(Files.readString(model.resolve("merges.txt")), prepared.domain.file("merges.txt").content)
+      val manifest = JsonIO.read(path.getParent.resolve("manifest.json"))
+      val methods = manifest.hcursor.downField("files").values.get.map(f => f.hcursor.get[String]("name").toOption.get -> f.hcursor.get[String]("method").toOption.get).toMap
+      assertEquals(methods("ple-token-ids.json"), "generated")
+      assertEquals(methods("README.md"), "buffered-copy")
+      assertEquals(manifest.hcursor.get[String]("family"), Right("flash-next"))
+      CheckpointProcessor.verifyManifest(path.getParent.resolve("manifest.json"), ProcessingFixtures.reference, options)
+      val again = CheckpointProcessor.plan(model, kanji, PolicySettings(), output.resolve("runs/again"), options)
+      assertEquals(PlanStore.loadVerified(again).domain.removedRows, 0)
+      Files.delete(model.resolve("ple-token-ids.json"))
+      intercept[DataException](CheckpointProcessor.verifyManifest(path.getParent.resolve("manifest.json"), ProcessingFixtures.reference, options))
+    }
+  }
+
+  test("publication refuses a target created after staging, and copying keeps the base publication") {
+    ProcessingFixtures.withModel { (_, input, output) =>
+      Files.createDirectories(output.resolve("stage"))
+      Files.createDirectories(output.resolve("taken"))
+      intercept[DataException](FileTransfer.platform.publishNew(output.resolve("stage"), output.resolve("taken")))
+      assert(Files.isDirectory(output.resolve("stage")))
+      FileTransfer.copying(FileTransfer.platform).publishNew(output.resolve("stage"), output.resolve("published"))
+      assert(Files.isDirectory(output.resolve("published")) && !Files.exists(output.resolve("stage")))
+      assertEquals(FileTransfer.copying(FileTransfer.platform).cloneNew(input.resolve("README.md"), output.resolve("x")), None)
+      assert(!Files.exists(output.resolve("x")))
     }
   }
 
@@ -144,7 +164,7 @@ class ProcessingSuite extends munit.FunSuite:
       Files.writeString(input.resolve("config.json"), loaded.config.original.mapObject(_.add("vocab_size", Json.fromInt(rows))).noSpaces)
       Files.writeString(input.resolve("model.safetensors.index.json"), loaded.index.original.mapObject(fields => fields.add("metadata", fields("metadata").get.mapObject(_.add("total_size", Json.fromLong(cursor))))).noSpaces)
       val settings = PolicySettings(forbiddenScripts = Set.empty, pruneHanOutsideReference = false)
-      val options = ProcessingOptions(outputRoot = output, cloner = FileCloner.disabled)
+      val options = ProcessingOptions(outputRoot = output, transfer = FileTransfer.copying(FileTransfer.platform))
       val plan = CheckpointProcessor.plan(input, kanji, settings, output.resolve("runs/noop"), options)
       assertEquals(PlanStore.loadVerified(plan).domain.removedRows, 0)
       val result = CheckpointProcessor.applyPlan(plan, output.resolve("models/noop"), ProcessingFixtures.reference, options)
@@ -185,7 +205,7 @@ class ProcessingSuite extends munit.FunSuite:
       val source = input.resolve("README.md")
       val dest = output.resolve("copy.md")
       val method = BinaryTransfer.copyFile(source, dest)
-      assert(Set("apfs-clone", "buffered-copy")(method))
+      assert(Set("clonefile", "ficlone", "buffered-copy")(method))
       assert(!Files.isSameFile(source, dest))
       Files.writeString(dest, "changed independently")
       assertEquals(Files.readString(source), "Synthetic checkpoint fixture\n")

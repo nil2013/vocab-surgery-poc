@@ -15,28 +15,53 @@ private[vocabsurgery] object DomainJson:
     .getOrElse(DomainChecks.fail("missing-json-field", s"$at.$name", "required field is absent"))
   def text(value: Json, at: String): String = value.asString.getOrElse(DomainChecks.fail("invalid-json-string", at, "expected string"))
 
-/** Schema-specific token references; ordinary hyperparameters and template strings are untouched. */
+/** Schema-specific token references; ordinary hyperparameters and template strings are untouched.
+  * Token-ID fields are read in `scopes` objects only; one found elsewhere in the document stops the operation.
+  */
 object TokenReferences:
   private val scalarOrList = Set("bos_token_id", "eos_token_id", "pad_token_id", "decoder_start_token_id",
     "forced_bos_token_id", "forced_eos_token_id", "unk_token_id", "sep_token_id", "cls_token_id", "mask_token_id")
   private val optionalLists = Set("suppress_tokens", "begin_suppress_tokens")
+  private val structured = Set("force_words_ids", "bad_words_ids", "forced_decoder_ids", "sequence_bias")
+  private def tokenField(name: String): Boolean = scalarOrList(name) || optionalLists(name) || structured(name) ||
+    name.endsWith("_token_id") || name.endsWith("_token_ids")
 
-  def requiredRootIds(json: Json): Set[OriginalTokenId] =
-    val ids = Set.newBuilder[OriginalTokenId]
-    transformRoot(json, (id, _) => { ids += id; Json.fromInt(id.intValue) },
-      id => Some(Json.fromInt(id.intValue)))
-    ids.result()
+  /** IDs that must survive, with their locations. `extra` names further single-ID fields of the scopes. */
+  def required(json: Json, scopes: Vector[JsonPath] = Vector(JsonPath.root), extra: Set[String] = Set.empty): Vector[(String, OriginalTokenId)] =
+    val found = Vector.newBuilder[(String, OriginalTokenId)]
+    transform(json, scopes, extra, (id, at) => { found += at -> id; Json.fromInt(id.intValue) }, id => Some(Json.fromInt(id.intValue)))
+    found.result()
 
-  def rewriteRoot(json: Json, projection: VocabularyProjection): Json =
-    transformRoot(json, (id, _) => Json.fromInt(projection.requireCompact(id).intValue),
+  def requiredIds(json: Json, scopes: Vector[JsonPath] = Vector(JsonPath.root), extra: Set[String] = Set.empty): Set[OriginalTokenId] =
+    required(json, scopes, extra).map(_._2).toSet
+
+  def rewrite(json: Json, projection: VocabularyProjection, scopes: Vector[JsonPath] = Vector(JsonPath.root), extra: Set[String] = Set.empty): Json =
+    transform(json, scopes, extra, (id, _) => Json.fromInt(projection.requireCompact(id).intValue),
       id => projection.compact(id).map(compact => Json.fromInt(compact.intValue)))
 
-  private def transformRoot(json: Json, required: (OriginalTokenId, String) => Json,
+  private def transform(json: Json, scopes: Vector[JsonPath], extra: Set[String], required: (OriginalTokenId, String) => Json,
       optional: OriginalTokenId => Option[Json]): Json =
-    val source = DomainJson.fields(json, "config")
+    rejectUnscoped(json, JsonPath.root, scopes.toSet)
+    scopes.foldLeft(json) { (document, scope) =>
+      if scope.get(document).forall(_.isNull) then document
+      else scope.modify(document)(transformObject(_, scope.text, extra, required, optional))
+    }
+
+  private def rejectUnscoped(node: Json, at: JsonPath, scopes: Set[JsonPath]): Unit =
+    node.asObject.foreach { fields =>
+      if !scopes(at) then fields.keys.find(tokenField).foreach { name =>
+        DomainChecks.fail("unsupported-token-reference", (at / name).text, "token-ID field outside the model family's token-ID scopes")
+      }
+      fields.toVector.foreach((name, value) => rejectUnscoped(value, at / name, scopes))
+    }
+    node.asArray.foreach(_.zipWithIndex.foreach((value, index) => rejectUnscoped(value, at / s"[$index]", scopes)))
+
+  private def transformObject(json: Json, scope: String, extra: Set[String], required: (OriginalTokenId, String) => Json,
+      optional: OriginalTokenId => Option[Json]): Json =
+    val source = DomainJson.fields(json, scope)
     var output = source
     source.toVector.foreach { (name, value) =>
-      val at = s"config.$name"
+      val at = s"$scope.$name"
       def id(value: Json, where: String): OriginalTokenId = OriginalTokenId(DomainJson.integer(value, where))
       def requiredTree(value: Json, where: String): Json = value.asArray match
         case Some(values) =>
@@ -44,7 +69,7 @@ object TokenReferences:
           Json.fromValues(values.zipWithIndex.map((item, i) => requiredTree(item, s"$where[$i]")))
         case None => required(id(value, where), where)
       if !value.isNull then
-        if scalarOrList(name) then
+        if scalarOrList(name) || extra(name) then
           val mapped = value.asArray match
             case Some(values) =>
               DomainChecks.check(values.nonEmpty, "empty-required-ids", at, "required ID list cannot be empty")
@@ -83,7 +108,7 @@ object TokenReferences:
             Json.arr(items(0), if items(1).isNull then Json.Null else required(id(items(1), at), at))
           }
           output = output.add(name, Json.fromValues(pairs))
-        else if name.endsWith("_token_id") || name.endsWith("_token_ids") || name == "sequence_bias" then
+        else if tokenField(name) then
           DomainChecks.fail("unsupported-token-reference", at, "unrecognized token-reference schema")
     }
     Json.fromJsonObject(output)
@@ -92,12 +117,12 @@ object TokenReferences:
   def requiredTokenizerIds(tokenizer: Json, tokenizerConfig: Json): Set[OriginalTokenId] =
     val ids = Set.newBuilder[OriginalTokenId]
     transformTokenizer(tokenizer, tokenizerConfig, id => { ids += id; Json.fromInt(id.intValue) })
-    ids.result() ++ requiredRootIds(tokenizerConfig)
+    ids.result() ++ requiredIds(tokenizerConfig)
 
   def rewriteTokenizerReferences(tokenizer: Json, config: Json, projection: VocabularyProjection): (Json, Json) =
     val (rewritten, decoderConfig) = transformTokenizer(tokenizer, config,
       id => Json.fromInt(projection.requireCompact(id).intValue))
-    (rewritten, rewriteRoot(decoderConfig, projection))
+    (rewritten, rewrite(decoderConfig, projection))
 
   private def transformTokenizer(tokenizer: Json, config: Json, map: OriginalTokenId => Json): (Json, Json) =
     def mapId(value: Json, at: String): Json = map(OriginalTokenId(DomainJson.integer(value, at)))
@@ -156,7 +181,12 @@ object TokenReferences:
     }
     val single = Vector("bos_token", "eos_token", "pad_token", "unk_token", "sep_token", "cls_token", "mask_token")
       .flatMap(name => fields(name).filterNot(_.isNull).map(content(_, name)))
+    // Hugging Face writes extra_special_tokens either as a list or as a role -> token object.
     val lists = Vector("additional_special_tokens", "extra_special_tokens").flatMap { name =>
-      fields(name).filterNot(_.isNull).toVector.flatMap(value => DomainJson.array(value, name).map(content(_, name)))
+      fields(name).filterNot(_.isNull).toVector.flatMap { value =>
+        val items = value.asObject.map(_.toVector.map((role, item) => item -> s"$name.$role"))
+          .getOrElse(DomainJson.array(value, name).map(_ -> name))
+        items.map(content(_, _))
+      }
     }
     (single ++ lists).toSet

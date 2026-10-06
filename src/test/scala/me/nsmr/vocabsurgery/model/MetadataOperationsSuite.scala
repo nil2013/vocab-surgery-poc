@@ -15,8 +15,8 @@ class MetadataOperationsSuite extends munit.FunSuite:
       "force_words_ids" -> Json.arr(Json.arr(id(0), id(4)), Json.arr(Json.arr(id(2)), Json.arr(id(4)))),
       "temperature" -> Json.fromDoubleOrNull(0.75), "num_attention_heads" -> id(4),
       "unknown" -> Json.obj("id" -> id(4)), "chat_template" -> Json.fromString("{{ 4 }}"))
-    assertEquals(TokenReferences.requiredRootIds(json), Set(OriginalTokenId(0), OriginalTokenId(2), OriginalTokenId(4)))
-    val out = TokenReferences.rewriteRoot(json, projection)
+    assertEquals(TokenReferences.requiredIds(json), Set(OriginalTokenId(0), OriginalTokenId(2), OriginalTokenId(4)))
+    val out = TokenReferences.rewrite(json, projection)
     assertEquals(out.hcursor.downField("eos_token_id").focus, Some(Json.arr(id(1), id(2))))
     assertEquals(out.hcursor.downField("forced_decoder_ids").focus, Some(Json.arr(Json.arr(id(4), id(1)), Json.arr(id(3), Json.Null))))
     Vector("temperature", "num_attention_heads", "unknown", "chat_template", "pad_token_id").foreach { field =>
@@ -27,8 +27,8 @@ class MetadataOperationsSuite extends munit.FunSuite:
   test("suppression drops deleted IDs and bad words as whole sequences, without making them protected") {
     val json = Json.obj("suppress_tokens" -> Json.arr(id(0), id(1), id(4)),
       "begin_suppress_tokens" -> Json.arr(id(3)), "bad_words_ids" -> Json.arr(Json.arr(id(2), id(4)), Json.arr(id(0), id(1))))
-    assertEquals(TokenReferences.requiredRootIds(json), Set.empty[OriginalTokenId])
-    val rewritten = TokenReferences.rewriteRoot(json, projection)
+    assertEquals(TokenReferences.requiredIds(json), Set.empty[OriginalTokenId])
+    val rewritten = TokenReferences.rewrite(json, projection)
     assertEquals(rewritten.hcursor.downField("suppress_tokens").focus, Some(Json.arr(id(0), id(2))))
     assertEquals(rewritten.hcursor.downField("begin_suppress_tokens").focus, Some(Json.arr()))
     assertEquals(rewritten.hcursor.downField("bad_words_ids").focus, Some(Json.arr(Json.arr(id(1), id(2)))))
@@ -46,8 +46,26 @@ class MetadataOperationsSuite extends munit.FunSuite:
       Json.obj("forced_decoder_ids" -> Json.arr(Json.arr(id(-1), id(2)))),
       Json.obj("bad_words_ids" -> Json.arr(Json.arr())),
       Json.obj("suppress_tokens" -> Json.arr(id(5))))
-      .foreach(json => intercept[DomainException](TokenReferences.rewriteRoot(json, projection)))
-    assertEquals(TokenReferences.rewriteRoot(Json.obj("future_token_id" -> Json.Null), projection), Json.obj("future_token_id" -> Json.Null))
+      .foreach(json => intercept[DomainException](TokenReferences.rewrite(json, projection)))
+    assertEquals(TokenReferences.rewrite(Json.obj("future_token_id" -> Json.Null), projection), Json.obj("future_token_id" -> Json.Null))
+  }
+
+  test("scoped references reach nested objects, take family fields, and refuse token IDs anywhere else") {
+    val json = Json.obj("image_token_id" -> id(4), "text_config" -> Json.obj("eos_token_id" -> id(2), "vocab_size" -> id(5)),
+      "vision_config" -> Json.obj("depth" -> id(4)), "list" -> Json.arr(Json.obj("x" -> id(1))))
+    val scopes = Vector(JsonPath.root, JsonPath("text_config"), JsonPath("absent"))
+    assertEquals(TokenReferences.required(json, scopes, Set("image_token_id")).toSet,
+      Set("$.image_token_id" -> OriginalTokenId(4), "text_config.eos_token_id" -> OriginalTokenId(2)))
+    val out = TokenReferences.rewrite(json, projection, scopes, Set("image_token_id"))
+    assertEquals(out.hcursor.get[Int]("image_token_id"), Right(2))
+    assertEquals(out.hcursor.downField("text_config").get[Int]("eos_token_id"), Right(1))
+    assertEquals(out.hcursor.downField("text_config").get[Int]("vocab_size"), Right(5))
+    intercept[DomainException](TokenReferences.required(json, scopes))
+    intercept[DomainException](TokenReferences.required(json, Vector(JsonPath.root), Set("image_token_id")))
+    val nested = Json.obj("list" -> Json.arr(Json.obj("pad_token_id" -> id(0))))
+    intercept[DomainException](TokenReferences.required(nested))
+    assertEquals(TokenReferences.configuredContents(Json.obj("extra_special_tokens" -> Json.obj("image_token" -> Json.fromString("<i>")),
+      "additional_special_tokens" -> Json.arr(Json.obj("content" -> Json.fromString("<a>"))))), Set("<i>", "<a>"))
   }
 
   test("padding, nested post-processors and added-token decoder keys all share the projection") {
@@ -84,7 +102,7 @@ class MetadataOperationsSuite extends munit.FunSuite:
       .mapObject(fields => fields.add("model", fields("model").get.mapObject(_.add("merges", strings))))
     val tokenizer = source.copy(original = original)
     val policy = PruningPolicy(JapaneseKanjiReference.fromCharacters(Set(CodePoint('日'.toInt))), explicitForbidden = Set(CodePoint('b'.toInt)), protectedContents = Set("ab"))
-    val analysis = VocabularyOperations.analyze(tokenizer, TokenizerFixtures.rows(tokenizer) + 2, policy)
+    val analysis = VocabularyOperations.analyze(tokenizer, ByteLevelBpe, TokenizerFixtures.rows(tokenizer) + 2, policy, Set.empty, CoderNext.requiredTokens)
     val result = TokenizerRewrite(tokenizer, analysis)
     assertEquals(result.hcursor.downField("future").focus, original.hcursor.downField("future").focus)
     Vector("normalizer", "pre_tokenizer").foreach(field => assertEquals(result.hcursor.downField(field).focus, original.hcursor.downField(field).focus))

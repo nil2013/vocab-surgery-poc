@@ -39,7 +39,7 @@ final case class PruningPolicy(
       if result.isEmpty then None else Some(ForbiddenCharacter(cp, result))
 
 enum ProtectionReason:
-  case BaseByte, PartialUtf8, AddedToken, RequiredReference, Explicit, Math
+  case BaseToken, PartialUtf8, AddedToken, RequiredReference, Explicit, Math
 
 final case class TokenAnalysis(
     id: OriginalTokenId,
@@ -51,11 +51,6 @@ final case class TokenAnalysis(
 ):
   def protectedToken: Boolean = protection.nonEmpty
   def directDelete: Boolean = !protectedToken && forbidden.nonEmpty
-
-object ProtocolTokens:
-  val CoderNextRequired: Set[String] = Set("<|endoftext|>", "<|im_start|>", "<|im_end|>",
-    "<|fim_prefix|>", "<|fim_middle|>", "<|fim_suffix|>", "<|fim_pad|>", "<|repo_name|>", "<|file_sep|>",
-    "<tool_call>", "</tool_call>", "<tool_response>", "</tool_response>", "<think>", "</think>")
 
 final case class VocabularyAnalysis(
     tokens: Vector[TokenAnalysis],
@@ -70,13 +65,14 @@ final case class VocabularyAnalysis(
 object VocabularyOperations:
   def analyze(
       tokenizer: TokenizerData,
+      scheme: TokenizerScheme,
       originalRows: Int,
       policy: PruningPolicy,
-      requiredIds: Set[OriginalTokenId] = Set.empty,
-      requiredContents: Set[String] = ProtocolTokens.CoderNextRequired
+      requiredIds: Set[OriginalTokenId],
+      requiredContents: Set[String]
   ): VocabularyAnalysis =
     DomainChecks.check(originalRows > 0, "invalid-vocabulary-size", "analysis", "original row count must be positive")
-    val graph = BpeGraph.from(tokenizer)
+    val graph = BpeGraph.from(tokenizer, scheme)
     val lexical = tokenizer.vocabulary.map(token => token.id -> token).toMap
     val added = tokenizer.addedTokens.map(token => token.id -> token).toMap
     DomainChecks.check(added.size == tokenizer.addedTokens.size && tokenizer.addedTokens.map(_.content).distinct.size == added.size,
@@ -88,7 +84,7 @@ object VocabularyOperations:
     val ids = graph.ids ++ added.keySet
     DomainChecks.check(ids.forall(_.intValue < originalRows), "id-out-of-range", "analysis", "registered ID exceeds model rows")
     val byContent = graph.vocabulary ++ added.values.map(token => token.content -> token.id)
-    val decodedLexical = tokenizer.vocabulary.map(token => token.id -> ByteLevel.decode(token.encoded)).toMap
+    val decodedLexical = tokenizer.vocabulary.map(token => token.id -> scheme.decode(token.encoded)).toMap
     val bySurface = decodedLexical.toVector.flatMap((id, decoded) => decoded.surface.map(surface => surface.text -> id)).toMap
     val explicitIds = policy.protectedContents.flatMap { content =>
       val matched = byContent.get(content).toSet ++ bySurface.get(content).toSet
@@ -105,7 +101,7 @@ object VocabularyOperations:
       val surface = added.get(id).map(token => TokenSurface(token.content)).orElse(decoded.flatMap(_.surface))
       val content = lex.map(_.encoded).getOrElse(added(id).content)
       val protectedBy = Set.newBuilder[ProtectionReason]
-      if decoded.exists(_.bytes.size == 1) then protectedBy += ProtectionReason.BaseByte
+      if graph.roots(id) then protectedBy += ProtectionReason.BaseToken
       if decoded.exists(_.surface.isEmpty) then protectedBy += ProtectionReason.PartialUtf8
       if added.contains(id) then protectedBy += ProtectionReason.AddedToken
       if required(id) then protectedBy += ProtectionReason.RequiredReference

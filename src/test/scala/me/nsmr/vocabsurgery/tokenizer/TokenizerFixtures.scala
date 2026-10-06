@@ -6,7 +6,7 @@ import me.nsmr.vocabsurgery.model.*
 
 object TokenizerFixtures:
   def create(extra: Vector[String] = Vector.empty, merges: Vector[BpeMerge] = Vector.empty,
-      addedContents: Vector[String] = ProtocolTokens.CoderNextRequired.toVector.sorted): TokenizerData =
+      addedContents: Vector[String] = CoderNext.requiredTokens.toVector.sorted): TokenizerData =
     val keys = (ByteLevel.alphabet ++ extra).distinct
     val vocabulary = keys.zipWithIndex.map((key, index) => LexicalToken(key, OriginalTokenId(index)))
     val added = addedContents.zipWithIndex.map { (content, index) =>

@@ -10,6 +10,8 @@ import me.nsmr.vocabsurgery.unicode.*
 class VocabularySuite extends munit.ScalaCheckSuite:
   private val japanese = JapaneseKanjiReference.fromCharacters(CodePoint.sequence("日本").toSet)
   private val policy = PruningPolicy(japanese)
+  private def analyze(tokenizer: TokenizerData, rows: Int, policy: PruningPolicy): VocabularyAnalysis =
+    VocabularyOperations.analyze(tokenizer, ByteLevelBpe, rows, policy, Set.empty, CoderNext.requiredTokens)
 
   test("ByteLevel restores all 256 bytes exactly and never replaces malformed UTF-8") {
     val bytes = (0 to 255).map(_.toByte).toVector
@@ -34,20 +36,20 @@ class VocabularySuite extends munit.ScalaCheckSuite:
     val partial = ByteLevel.encode(Vector(0xff.toByte, 0xff.toByte))
     val extra = Vector(arabic, partial, "ab")
     val merges = Vector(BpeMerge(arabic.take(1), arabic.drop(1)), BpeMerge(partial.take(1), partial.drop(1)), BpeMerge("a", "b"))
-    val tokenizer = TokenizerFixtures.create(extra, merges, ProtocolTokens.CoderNextRequired.toVector.sorted :+ "ع_tool")
+    val tokenizer = TokenizerFixtures.create(extra, merges, CoderNext.requiredTokens.toVector.sorted :+ "ع_tool")
     val protectedPolicy = policy.copy(protectedContents = Set(arabic))
-    val analysis = VocabularyOperations.analyze(tokenizer, TokenizerFixtures.rows(tokenizer) + 3, protectedPolicy)
+    val analysis = analyze(tokenizer, TokenizerFixtures.rows(tokenizer) + 3, protectedPolicy)
     assert(analysis.cleanup.directDeleted.isEmpty)
     assertEquals(analysis.unregisteredIds.size, 3)
     assert(analysis.protectedConflicts.exists(_.content == arabic))
     assert(analysis.protectedConflicts.exists(_.content == "ع_tool"))
     assert(analysis.tokens.find(_.content == partial).get.protection(ProtectionReason.PartialUtf8))
-    assertEquals(analysis.tokens.count(_.protection(ProtectionReason.BaseByte)), 256)
+    assertEquals(analysis.tokens.count(_.protection(ProtectionReason.BaseToken)), 256)
     assert(analysis.tokens.find(_.content == "<tool_call>").get.protection(ProtectionReason.AddedToken))
-    val pruned = VocabularyOperations.analyze(tokenizer, TokenizerFixtures.rows(tokenizer), policy)
+    val pruned = analyze(tokenizer, TokenizerFixtures.rows(tokenizer), policy)
     assertEquals(pruned.cleanup.directDeleted, Set(TokenizerFixtures.id(tokenizer, arabic)))
     assert(pruned.projection.compact(TokenizerFixtures.id(tokenizer, "<tool_call>")).isDefined)
-    val literalSurface = VocabularyOperations.analyze(tokenizer, TokenizerFixtures.rows(tokenizer), policy.copy(protectedContents = Set("ع")))
+    val literalSurface = analyze(tokenizer, TokenizerFixtures.rows(tokenizer), policy.copy(protectedContents = Set("ع")))
     assert(literalSurface.projection.compact(TokenizerFixtures.id(tokenizer, arabic)).isDefined)
     assert(literalSurface.tokens.find(_.content == arabic).get.protection(ProtectionReason.Explicit))
   }
@@ -66,7 +68,7 @@ class VocabularySuite extends munit.ScalaCheckSuite:
     assert(settings.forbidden(aleph).isEmpty)
     assert(settings.forbidden(arabicMath).isEmpty)
     assertEquals(settings.forbidden(TokenSurface("个ℵ")).map(_.character), Vector(CodePoint(0x4e2a)))
-    val result = VocabularyOperations.analyze(tokenizer, TokenizerFixtures.rows(tokenizer), settings)
+    val result = analyze(tokenizer, TokenizerFixtures.rows(tokenizer), settings)
     val mathematical = result.tokens.find(_.content == math).get
     assert(mathematical.protection(ProtectionReason.Math))
     assert(result.projection.compact(mathematical.id).isDefined)
@@ -74,7 +76,7 @@ class VocabularySuite extends munit.ScalaCheckSuite:
     val disabled = settings.copy(protectMath = false)
     assert(disabled.forbidden(aleph).nonEmpty)
     assert(disabled.forbidden(arabicMath).nonEmpty)
-    val pruned = VocabularyOperations.analyze(tokenizer, TokenizerFixtures.rows(tokenizer), disabled)
+    val pruned = analyze(tokenizer, TokenizerFixtures.rows(tokenizer), disabled)
     assert(pruned.cleanup.directDeleted(mathematical.id))
     assert(!pruned.tokens.find(_.content == math).get.protection(ProtectionReason.Math))
   }
@@ -82,13 +84,13 @@ class VocabularySuite extends munit.ScalaCheckSuite:
   test("analysis diagnoses missing protocol, byte alphabet, unknown protection and inconsistent token identities") {
     val tokenizer = TokenizerFixtures.create()
     val size = TokenizerFixtures.rows(tokenizer)
-    intercept[DomainException](VocabularyOperations.analyze(tokenizer.copy(addedTokens = Vector.empty), size, policy))
-    intercept[DomainException](VocabularyOperations.analyze(tokenizer.copy(vocabulary = tokenizer.vocabulary.tail), size, policy))
-    intercept[DomainException](VocabularyOperations.analyze(tokenizer, size, policy.copy(protectedIds = Set(OriginalTokenId(size + 1)))))
-    intercept[DomainException](VocabularyOperations.analyze(tokenizer, size - 1, policy))
+    intercept[DomainException](analyze(tokenizer.copy(addedTokens = Vector.empty), size, policy))
+    intercept[DomainException](analyze(tokenizer.copy(vocabulary = tokenizer.vocabulary.tail), size, policy))
+    intercept[DomainException](analyze(tokenizer, size, policy.copy(protectedIds = Set(OriginalTokenId(size + 1)))))
+    intercept[DomainException](analyze(tokenizer, size - 1, policy))
     val conflict = tokenizer.addedTokens.head.copy(id = OriginalTokenId(0))
-    intercept[DomainException](VocabularyOperations.analyze(tokenizer.copy(addedTokens = Vector(conflict)), size, policy))
-    intercept[DomainException](VocabularyOperations.analyze(tokenizer.copy(addedTokens = tokenizer.addedTokens :+ tokenizer.addedTokens.head), size, policy))
+    intercept[DomainException](analyze(tokenizer.copy(addedTokens = Vector(conflict)), size, policy))
+    intercept[DomainException](analyze(tokenizer.copy(addedTokens = tokenizer.addedTokens :+ tokenizer.addedTokens.head), size, policy))
   }
 
   test("projection is deterministic, bidirectional and includes nulls for unused rows") {

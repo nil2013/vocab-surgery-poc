@@ -24,7 +24,7 @@ object Main:
     def python = opt[String]("python").required().valueName("<interpreter>").action((v, c) => c.copy(python = Path.of(v)))
       .text("Python with tokenizers and transformers installed; no packages are downloaded")
     def manifest = opt[String]("manifest").required().action((v, c) => c.copy(manifest = Path.of(v)))
-    OParser.sequence(programName("vocab-surgery"), head("vocab-surgery", ProcessingIO.ToolVersion),
+    OParser.sequence(programName("vocab-surgery"), head("vocab-surgery"),
       help("help").text("Show command usage (also: help <command>)"),
       cmd("inspect").action((_, c) => c.copy(command = "inspect")).text("Inspect source metadata without reading weights").children(
         opt[String]("source").required().action((v, c) => c.copy(source = Path.of(v))),
@@ -37,7 +37,7 @@ object Main:
       cmd("apply").action((_, c) => c.copy(command = "apply")).text("Revalidate plan, stage, compare every tensor and publish a new model").children(
         opt[String]("plan").required().action((v, c) => c.copy(plan = Path.of(v))),
         opt[String]("model-out").required().action((v, c) => c.copy(modelOutput = Path.of(v))), python,
-        opt[Unit]("copy-only").action((_, c) => c.copy(copyOnly = true)).text("Disable APFS clone; retain capacity checks and bounded copying")),
+        opt[Unit]("copy-only").action((_, c) => c.copy(copyOnly = true)).text("Copy instead of copy-on-write cloning; capacity checks and bounded copying remain")),
       cmd("verify").action((_, c) => c.copy(command = "verify")).text("Recheck manifest hashes, full tensor correspondence and reference tokenizer").children(
         manifest, python, opt[String]("report").action((v, c) => c.copy(report = Some(Path.of(v)))).text("Optional new verification report under outputs")),
       cmd("evaluate").action((_, c) => c.copy(command = "evaluate")).text("Compare source and pruned models through an explicitly supplied oMLX server").children(
@@ -84,7 +84,7 @@ object Main:
               val path = CheckpointProcessor.plan(config.source, config.kanji, settings, config.runDirectory, runtime)
               Json.obj("plan" -> Json.fromString(path.toString), "summary" -> JsonIO.read(path.getParent.resolve("summary.json")))
             case "apply" => Json.obj("modelOutput" -> Json.fromString(CheckpointProcessor.applyPlan(config.plan, config.modelOutput, ExternalTools.reference(config.python, helpers),
-              if config.copyOnly then runtime.copy(cloner = FileCloner.disabled) else runtime).toString))
+              if config.copyOnly then runtime.copy(transfer = FileTransfer.copying(runtime.transfer)) else runtime).toString))
             case "verify" =>
               val result = CheckpointProcessor.verifyManifest(config.manifest, ExternalTools.reference(config.python, helpers), runtime).json
               config.report.foreach { path =>

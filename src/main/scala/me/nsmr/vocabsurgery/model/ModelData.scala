@@ -4,25 +4,17 @@ import io.circe.Json
 import java.nio.file.Path
 import me.nsmr.vocabsurgery.core.*
 
-enum TokenIdSetting:
-  case Single(id: OriginalTokenId)
-  case Multiple(ids: Vector[OriginalTokenId])
-
 final case class QuantizationSpec(bits: Int, groupSize: Int, mode: String)
 final case class QuantizationConfig(default: QuantizationSpec, overrides: Map[String, QuantizationSpec])
 
-/** Unknown config fields are preserved in the immutable original JSON. */
+/** The dimensions surgery needs, read where `family` keeps them. Unknown fields stay in the immutable original JSON. */
 final case class ModelConfig(
-    modelType: String,
+    family: ModelFamily,
     vocabSize: Int,
     hiddenSize: Int,
-    tieWordEmbeddings: Boolean,
-    quantization: QuantizationConfig,
-    tokenIds: Map[String, TokenIdSetting],
+    quantization: Option[QuantizationConfig],
     original: Json
 )
-
-final case class GenerationConfig(tokenIds: Map[String, TokenIdSetting], original: Json)
 
 /** The key is ByteLevel encoded text, not a decoded TokenSurface. */
 final case class LexicalToken(encoded: String, id: OriginalTokenId)
@@ -55,15 +47,19 @@ final case class ShardIndex(
 final case class SourceFingerprint(path: Path, sha256: String)
 final case class TextAsset(path: Path, text: String)
 
-/** All input metadata for surgery. Tensor payloads are deliberately absent. */
+/** All input metadata for surgery. Tensor payloads are deliberately absent.
+  * `tokenizerCompanions` and `familyFiles` hold the source copies of the files the tokenizer scheme and the family name.
+  */
 final case class ModelSnapshot(
     directory: Path,
     config: ModelConfig,
-    generation: GenerationConfig,
+    generation: Json,
     tokenizer: TokenizerData,
     tokenizerConfig: Json,
+    tokenizerCompanions: Map[String, String],
+    familyFiles: Map[String, Json],
     index: ShardIndex,
     shards: Vector[SafetensorsFile],
-    chatTemplate: TextAsset,
+    chatTemplate: Option[TextAsset],
     metadataFingerprints: Vector[SourceFingerprint]
 )

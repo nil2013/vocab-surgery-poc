@@ -14,7 +14,7 @@ object PlanReports:
     inspection(model)
 
   def inspection(model: ModelSnapshot): Json =
-    Json.obj("source" -> Json.fromString(model.directory.toString), "modelType" -> Json.fromString(model.config.modelType),
+    Json.obj("source" -> Json.fromString(model.directory.toString), "family" -> Json.fromString(model.config.family.name),
       "rows" -> Json.fromInt(model.config.vocabSize), "hiddenSize" -> Json.fromInt(model.config.hiddenSize),
       "lexicalTokens" -> Json.fromInt(model.tokenizer.vocabulary.size), "addedTokens" -> Json.fromInt(model.tokenizer.addedTokens.size),
       "merges" -> Json.fromInt(model.tokenizer.merges.size), "shards" -> Json.fromInt(model.shards.size),
@@ -26,7 +26,7 @@ object PlanReports:
     val domain = plan.domain
     val reference = domain.policy.japanese
     val data = KanjiLoader.load(plan.kanjiDirectory)
-    ProcessingIO.write(directory.resolve("environment.json"), Json.obj("toolVersion" -> Json.fromString(ProcessingIO.ToolVersion),
+    ProcessingIO.write(directory.resolve("environment.json"), Json.obj("toolRevision" -> ProcessingIO.revision(Path.of(".")).fold(Json.Null)(Json.fromString),
       "javaVersion" -> Json.fromString(sys.props("java.version")), "osName" -> Json.fromString(sys.props("os.name")),
       "osVersion" -> Json.fromString(sys.props("os.version")), "osArch" -> Json.fromString(sys.props("os.arch")),
       "maxJvmHeapBytes" -> Json.fromLong(Runtime.getRuntime.maxMemory()), "recordedAt" -> Json.fromString(java.time.Instant.now().toString)))

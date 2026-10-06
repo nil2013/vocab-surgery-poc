@@ -9,7 +9,7 @@ import me.nsmr.vocabsurgery.model.ParameterCountPolicy
 import me.nsmr.vocabsurgery.tokenizer.PruningPolicy
 import me.nsmr.vocabsurgery.unicode.*
 
-/** Versioned, explicit policy settings. Reference contents are loaded and fingerprinted separately. */
+/** Explicit policy settings. Reference contents are loaded and fingerprinted separately. */
 final case class PolicySettings(
     forbiddenScripts: Set[UnicodeScript] = Set(UnicodeScript.Arabic, UnicodeScript.Cyrillic, UnicodeScript.Hangul),
     pruneHanOutsideReference: Boolean = true,
@@ -18,15 +18,12 @@ final case class PolicySettings(
     protectedIds: Set[OriginalTokenId] = Set.empty,
     protectedContents: Set[String] = Set.empty,
     parameterCount: ParameterCountPolicy = ParameterCountPolicy.OmitUnverified,
-    protectMath: Boolean = true,
-    formatVersion: Int = 2
+    protectMath: Boolean = true
 ):
-  require(Set(1, 2)(formatVersion), "unsupported policy format version")
-  require(formatVersion != 1 || !protectMath, "version 1 preserves legacy behavior without Math protection")
   def domain(reference: JapaneseKanjiReference): PruningPolicy =
     PruningPolicy(reference, forbiddenScripts, pruneHanOutsideReference, explicitForbidden, protectedIds, protectedContents, protectMath)
   def json: Json = Json.obj(
-    "formatVersion" -> Json.fromInt(formatVersion), "unicodeVersion" -> Json.fromString(UnicodeData.provenance.unicodeVersion),
+    "unicodeVersion" -> Json.fromString(UnicodeData.provenance.unicodeVersion),
     "forbiddenScripts" -> Json.fromValues(forbiddenScripts.toVector.map(_.name).sorted.map(Json.fromString)),
     "pruneHanOutsideReference" -> Json.fromBoolean(pruneHanOutsideReference),
     "japaneseExtra" -> Json.fromValues(japaneseExtra.toVector.sortBy(_.intValue).map(cp => Json.fromInt(cp.intValue))),
@@ -34,19 +31,16 @@ final case class PolicySettings(
     "protectedIds" -> Json.fromValues(protectedIds.toVector.sortBy(_.intValue).map(id => Json.fromInt(id.intValue))),
     "protectedContents" -> Json.fromValues(protectedContents.toVector.sorted.map(Json.fromString)),
     "unregisteredRows" -> Json.fromString("drop"),
-    "parameterCount" -> Json.fromString(if parameterCount == ParameterCountPolicy.OmitUnverified then "omit-unverified" else "verified-logical-weights"))
-    .mapObject(fields => if formatVersion == 2 then fields.add("protectMath", Json.fromBoolean(protectMath)) else fields)
+    "parameterCount" -> Json.fromString(if parameterCount == ParameterCountPolicy.OmitUnverified then "omit-unverified" else "verified-logical-weights"),
+    "protectMath" -> Json.fromBoolean(protectMath))
 
 object PolicySettings:
   def load(path: Path): PolicySettings = parse(JsonIO.read(path), path)
 
   def parse(json: Json, path: Path): PolicySettings = Diagnostics.guard(path, "policy") {
     val fields = JsonFields.obj(json, path, "policy")
-    val version = fields("formatVersion").map(JsonFields.int(_, path, "formatVersion")).getOrElse(2)
-    Diagnostics.check(Set(1, 2)(version), path, "formatVersion", "unsupported policy version")
-    val names = Set("formatVersion", "unicodeVersion", "forbiddenScripts", "pruneHanOutsideReference", "japaneseExtra",
-      "explicitForbidden", "protectedIds", "protectedContents", "unregisteredRows", "parameterCount") ++
-      (if version == 2 then Set("protectMath") else Set.empty[String])
+    val names = Set("unicodeVersion", "forbiddenScripts", "pruneHanOutsideReference", "japaneseExtra",
+      "explicitForbidden", "protectedIds", "protectedContents", "unregisteredRows", "parameterCount", "protectMath")
     Diagnostics.check(fields.keys.forall(names), path, "policy", "unknown policy field")
     fields("unicodeVersion").foreach(v => Diagnostics.check(JsonFields.text(v, path, "unicodeVersion") == UnicodeData.provenance.unicodeVersion, path, "unicodeVersion", "Unicode version does not match pinned provider"))
     fields("unregisteredRows").foreach(v => Diagnostics.check(JsonFields.text(v, path, "unregisteredRows") == "drop", path, "unregisteredRows", "only drop is supported"))
@@ -61,5 +55,5 @@ object PolicySettings:
     PolicySettings(scripts, fields("pruneHanOutsideReference").map(JsonFields.bool(_, path, "pruneHanOutsideReference")).getOrElse(true),
       points("japaneseExtra"), points("explicitForbidden"), array("protectedIds").getOrElse(Vector.empty).map(v => OriginalTokenId(JsonFields.int(v, path, "protectedIds"))).toSet,
       array("protectedContents").getOrElse(Vector.empty).map(v => JsonFields.text(v, path, "protectedContents")).toSet, parameters,
-      if version == 1 then false else fields("protectMath").map(JsonFields.bool(_, path, "protectMath")).getOrElse(true), version)
+      fields("protectMath").map(JsonFields.bool(_, path, "protectMath")).getOrElse(true))
   }

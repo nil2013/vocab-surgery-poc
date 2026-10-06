@@ -10,53 +10,39 @@ import me.nsmr.vocabsurgery.tokenizer.*
 import me.nsmr.vocabsurgery.io.{FileIO, JsonIO}
 import me.nsmr.vocabsurgery.unicode.UnicodeData
 
-/** Opt-in local integration test; does not download or read tensor payloads. */
+/** Opt-in local integration test on any supported snapshot; does not download or read tensor payloads.
+  * Checks family-independent invariants, so it runs unchanged on every registered model family.
+  */
 class LocalSnapshotSuite extends munit.FunSuite:
-  test("local Qwen3-Coder-Next 4bit snapshot matches the recorded source metadata") {
+  test("local snapshot plans a consistent projection with the recorded policy") {
     val source = sys.props.get("vocabSurgery.snapshot")
     assume(source.isDefined, "set -DvocabSurgery.snapshot=<snapshot> to run the local integration test")
     val snapshot = SnapshotLoader.load(Path.of(source.get))
-    assertEquals(snapshot.config.modelType, "qwen3_next")
-    assertEquals(snapshot.config.vocabSize, 151936)
-    assertEquals(snapshot.config.hiddenSize, 2048)
-    assertEquals(snapshot.config.quantization.default, QuantizationSpec(4, 64, "affine"))
-    assertEquals(snapshot.tokenizer.vocabulary.size, 151643)
-    assertEquals(snapshot.tokenizer.addedTokens.size, 26)
-    assertEquals(snapshot.tokenizer.merges.size, 151387)
-    assertEquals(snapshot.shards.size, 9)
-    assertEquals(snapshot.shards.map(_.tensors.size).sum, 1891)
-    assertEquals(snapshot.index.totalSize.map(_.longValue), Some(44844060160L))
+    val family = snapshot.config.family
     val registered = (snapshot.tokenizer.vocabulary.map(_.id) ++ snapshot.tokenizer.addedTokens.map(_.id)).toSet
-    assertEquals(snapshot.config.vocabSize - registered.size, 267)
-    val targets = snapshot.shards.flatMap(_.tensors).filter { tensor =>
-      tensor.name.startsWith("model.embed_tokens.") || tensor.name.startsWith("lm_head.")
-    }
-    assertEquals(targets.size, 6)
-    assertEquals(targets.map(_.dataRange.length.longValue).sum, 350060544L)
-    val tool = snapshot.tokenizer.addedTokens.find(_.content == "<tool_call>").get
-    assertEquals(tool.special, false)
-    println(s"Inspected ${snapshot.shards.size} shards / ${snapshot.shards.map(_.tensors.size).sum} tensors without loading payloads")
+    println(s"Inspected ${family.name}: ${snapshot.shards.size} shards / ${snapshot.shards.map(_.tensors.size).sum} tensors, " +
+      s"${snapshot.config.vocabSize} rows, ${registered.size} registered IDs, without loading payloads")
     val japanese = JapaneseKanjiReference.from(KanjiLoader.load(Path.of("kanji-data")))
-    // Preserve the recorded v1 baseline; current Math-protected policies have independent plans.
-    val plan = ModelOperations.plan(snapshot, PruningPolicy(japanese, protectMath = false))
-    assertEquals(plan.analysis.unregisteredIds.size, 267)
-    assertEquals(plan.analysis.tokens.count(_.protection(ProtectionReason.BaseByte)), 256)
-    assertEquals(plan.analysis.tokens.count(_.protection(ProtectionReason.PartialUtf8)), 1448)
+    val policyPath = sys.props.getOrElse("vocabSurgery.policy", "policies/ja-en-coding-v2.json")
+    val settings = me.nsmr.vocabsurgery.processing.PolicySettings.load(Path.of(policyPath))
+    val plan = ModelOperations.plan(snapshot, settings.domain(japanese))
+    assertEquals(plan.analysis.unregisteredIds.size, snapshot.config.vocabSize - registered.size)
+    assertEquals(plan.analysis.tokens.count(_.protection(ProtectionReason.BaseToken)), family.tokenizer.baseKeys.size)
     assert(plan.analysis.protectedConflicts.forall(token => plan.projection.compact(token.id).isDefined))
     assert(snapshot.tokenizer.addedTokens.forall(token => plan.projection.compact(token.id).isDefined))
-    assertEquals(plan.savedPayloadBytes.longValue, 2304L * plan.removedRows)
-    assertEquals(plan.shards.count(_.changed), 2)
-    assertEquals(plan.config.hcursor.get[Int]("vocab_size"), Right(plan.projection.compactSize))
-    val sourceEos = snapshot.config.original.hcursor.get[Vector[Int]]("eos_token_id").toOption.get
-    assertEquals(plan.config.hcursor.get[Vector[Int]]("eos_token_id"), Right(sourceEos.map(id => plan.projection.requireCompact(OriginalTokenId(id)).intValue)))
-    val targetsAfter = plan.shards.flatMap(_.tensors).filter(t => targets.exists(_.name == t.source.name))
-    assertEquals(targetsAfter.size, 6)
-    assert(targetsAfter.forall(_.result.shape.head == plan.projection.compactSize.toLong))
-    val untouched = plan.shards.flatMap(_.tensors).filterNot(t => targets.exists(_.name == t.source.name))
+    assertEquals(plan.savedPayloadBytes.longValue, plan.modules.map(_.bytesPerRow).sum * plan.removedRows)
+    val targets = plan.modules.flatMap(_.tensors.map(_.name)).toSet
+    val projected = plan.shards.flatMap(_.tensors).filter(t => targets(t.source.name))
+    assertEquals(projected.size, targets.size)
+    assert(projected.forall(_.result.shape.head == plan.projection.compactSize.toLong))
+    val untouched = plan.shards.flatMap(_.tensors).filterNot(t => targets(t.source.name))
     assert(untouched.forall(t => t.result.shape == t.source.shape && t.result.dtype == t.source.dtype && t.copies.map(_.source.length.longValue).sum == t.source.dataRange.length.longValue))
-    assertEquals(TokenReferences.requiredRootIds(plan.config).map(_.intValue).forall(_ < plan.projection.compactSize), true)
-    assertEquals(plan.config.hcursor.downField("quantization").focus, snapshot.config.original.hcursor.downField("quantization").focus)
-    println(s"Planned K=${plan.projection.compactSize}, direct=${plan.analysis.cleanup.directDeleted.size}, indirect=${plan.analysis.cleanup.indirectDeleted.size}, saved=${plan.savedPayloadBytes.longValue} bytes without reading payloads")
+    val config = plan.json("config.json")
+    family.vocabSize.foreach(path => assertEquals(path.get(config), Some(Json.fromInt(plan.projection.compactSize))))
+    assert(TokenReferences.requiredIds(config, family.tokenIdScopes, family.tokenIdFields).forall(_.intValue < plan.projection.compactSize))
+    assertEquals(config.hcursor.downField("quantization").focus, snapshot.config.original.hcursor.downField("quantization").focus)
+    println(s"Planned ${family.name} K=${plan.projection.compactSize}, direct=${plan.analysis.cleanup.directDeleted.size}, " +
+      s"indirect=${plan.analysis.cleanup.indirectDeleted.size}, saved=${plan.savedPayloadBytes.longValue} bytes, files=${plan.outputFiles.map(_.name).mkString(",")}")
     sys.props.get("vocabSurgery.tokenizersPython") match
       case Some(python) => checkReferenceTokenizer(python, snapshot, plan, japanese)
       case None => println("Reference tokenizers / NFC comparison not enabled; set vocabSurgery.tokenizersPython to opt in")
@@ -66,7 +52,7 @@ class LocalSnapshotSuite extends munit.FunSuite:
     val directory = Files.createTempDirectory("vocab-domain-oracle-")
     try
       val tokenizerPath = directory.resolve("tokenizer.json")
-      JsonIO.writeNew(tokenizerPath, plan.tokenizer)
+      JsonIO.writeNew(tokenizerPath, plan.json("tokenizer.json"))
       val loaded = TokenizerLoader.load(tokenizerPath)
       assertEquals((loaded.vocabulary.map(_.id.intValue) ++ loaded.addedTokens.map(_.id.intValue)).toSet, (0 until plan.projection.compactSize).toSet)
       val nfc = Json.fromValues(japanese.sortedCharacters.map(cp => Json.arr(Json.fromString(cp.text), Json.fromString(UnicodeData.normalize(TokenSurface(cp.text)).text))))

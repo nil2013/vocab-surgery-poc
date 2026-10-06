@@ -34,19 +34,18 @@ object TensorOperations:
       first = end
     TensorProjection(source, result, copies.result())
 
-final case class QuantizedVocabularyModule(name: String, quantization: QuantizationSpec,
-    weight: TensorMetadata, scales: TensorMetadata, biases: TensorMetadata):
-  def tensors: Vector[TensorMetadata] = Vector(weight, scales, biases)
+/** How a vocabulary module stores each row. Rows are copied as stored; nothing is dequantized. */
+enum RowEncoding:
+  case Dense
+  case AffineQuantized(spec: QuantizationSpec)
+
+/** A module whose tensors all have one row per vocabulary entry, projected in the same row order. */
+final case class VocabularyModule(name: String, encoding: RowEncoding, tensors: Vector[TensorMetadata]):
   def bytesPerRow: Long = tensors.map(t => t.shape.tail.foldLeft(t.dtype.byteWidth.toLong)(Math.multiplyExact)).foldLeft(0L)(Math.addExact)
 
-object QuantizedVocabularyModule:
-  def validate(name: String, config: ModelConfig, tensors: Map[String, TensorMetadata]): QuantizedVocabularyModule =
-    val quant = config.quantization.overrides.getOrElse(name, config.quantization.default)
-    DomainChecks.check(quant.mode == "affine" && Set(4, 8)(quant.bits) && quant.groupSize > 0,
-      "unsupported-quantization", name, "expected affine 4/8-bit uint32 packing with a positive group size")
-    val perWord = 32 / quant.bits
-    DomainChecks.check(config.hiddenSize > 0 && config.hiddenSize % perWord == 0 && config.hiddenSize % quant.groupSize == 0,
-      "invalid-quantized-dimensions", name, "hidden size must be divisible by packing and group sizes")
+object VocabularyModule:
+  /** Infer the encoding from the stored companions, then check every tensor against the configured dimensions. */
+  def validate(name: String, config: ModelConfig, tensors: Map[String, TensorMetadata]): VocabularyModule =
     def tensor(suffix: String, columns: Int): TensorMetadata =
       val full = s"$name.$suffix"
       val value = tensors.getOrElse(full, DomainChecks.fail("missing-companion-tensor", full, "required tensor absent"))
@@ -54,13 +53,29 @@ object QuantizedVocabularyModule:
         "expected row-major rank-2 vocabulary tensor")
       DomainChecks.check(value.expectedBytes == value.dataRange.length, "tensor-size-mismatch", full, "shape and byte range disagree")
       value
-    val weight = tensor("weight", config.hiddenSize / perWord)
-    val scales = tensor("scales", config.hiddenSize / quant.groupSize)
-    val biases = tensor("biases", config.hiddenSize / quant.groupSize)
-    DomainChecks.check(weight.dtype == TensorDType.U32, "unsupported-packed-dtype", weight.name, "packed weight must use U32")
-    DomainChecks.check(Set(TensorDType.F16, TensorDType.BF16, TensorDType.F32)(scales.dtype) && biases.dtype == scales.dtype,
-      "unsupported-companion-dtype", name, "scales and biases must share a supported floating dtype")
-    QuantizedVocabularyModule(name, quant, weight, scales, biases)
+    val module = if tensors.contains(s"$name.scales") then
+      val quant = config.quantization.map(q => q.overrides.getOrElse(name, q.default))
+        .getOrElse(DomainChecks.fail("missing-quantization", name, "quantized module without quantization settings"))
+      DomainChecks.check(quant.mode == "affine" && Set(4, 8)(quant.bits) && quant.groupSize > 0,
+        "unsupported-quantization", name, "expected affine 4/8-bit uint32 packing with a positive group size")
+      val perWord = 32 / quant.bits
+      DomainChecks.check(config.hiddenSize % perWord == 0 && config.hiddenSize % quant.groupSize == 0,
+        "invalid-quantized-dimensions", name, "hidden size must be divisible by packing and group sizes")
+      val weight = tensor("weight", config.hiddenSize / perWord)
+      val scales = tensor("scales", config.hiddenSize / quant.groupSize)
+      val biases = tensor("biases", config.hiddenSize / quant.groupSize)
+      DomainChecks.check(weight.dtype == TensorDType.U32, "unsupported-packed-dtype", weight.name, "packed weight must use U32")
+      DomainChecks.check(Set(TensorDType.F16, TensorDType.BF16, TensorDType.F32)(scales.dtype) && biases.dtype == scales.dtype,
+        "unsupported-companion-dtype", name, "scales and biases must share a supported floating dtype")
+      VocabularyModule(name, RowEncoding.AffineQuantized(quant), Vector(weight, scales, biases))
+    else
+      val weight = tensor("weight", config.hiddenSize)
+      DomainChecks.check(Set(TensorDType.F16, TensorDType.BF16, TensorDType.F32)(weight.dtype), "unsupported-dense-dtype", weight.name,
+        "dense weight must use a floating dtype")
+      VocabularyModule(name, RowEncoding.Dense, Vector(weight))
+    DomainChecks.check(tensors.keySet.filter(_.startsWith(s"$name.")) == module.tensors.map(_.name).toSet,
+      "unsupported-vocabulary-tensor", name, "unexpected companion tensor")
+    module
 
 /** Header and byte-copy description. Unchanged shards can be copied as complete files later. */
 final case class ShardProjection(source: SafetensorsFile, tensors: Vector[TensorProjection],
