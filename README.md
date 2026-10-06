@@ -108,4 +108,6 @@ sh -n scripts/vocab-surgery scripts/run-surgery.sh
 
 仕様と実装手順は [仕様書](outputs/SPEC.md)、loader の API と I/O は [インフラ層の設計](docs/INFRASTRUCTURE.md)、純粋な操作と invariants は [ドメイン操作の設計](docs/DOMAIN.md)、ファイル加工は [処理機構の設計](docs/PROCESSING.md)、before／after の条件と判定は [評価の手順](docs/EVALUATION.md) を参照。
 
+新しいモデル構造への拡張を検討する際は、[拡張性評価と設計提案](docs/EXTENSIBILITY.md) を参照。既存の Ornith snapshot をアーキテクチャの汎用性のストレステスト素材として、再利用できる基盤・モデル固有の前提・adapter による拡張案を記録している。Ornith 対応はまだ実装していない。
+
 追加 pruning を検討する際は、[初期 pruning 後の残存語彙調査（91fb703）](docs/REMAINING_VOCABULARY_91fb703.md) を参照。この版の policy で残る文字体系・語彙・記号の件数と例、数学文字との共用、集計条件を記録している。
