@@ -118,6 +118,14 @@ python3 scripts/tf_acceptance.py "$RUN/pruned-v2-server.log" \
 - `tf_bench.py` は日本語・英語・Python の 3 prompt を、MTP あり／なし（request の `draft`）で各 4 回、temperature 0、400 tokens で送る。最初の 1 回は warm-up として集計から除く。
 - [tf_acceptance.py](../scripts/tf_acceptance.py) は server log の `accepted=A/P` を、送った順の結果ファイルと completion tokens で照合して request に割り当て、ケースごとの MTP 受理率と 1 round あたりの token 数を出す。数が合わなければ停止する。
 
+[probe_replies.py](../scripts/probe_replies.py) は固定の prompt 集合を temperature 0 と 0.7（seed 1、2）で 1 本ずつ送り、応答と test-data の混入指標を JSONL に保存する。prompt にある字を写したもの（`copied`）と、prompt にない混入（`novel`）を分けて記録する。[mixed-ja.json](../scripts/prompts/mixed-ja.json) は日本語の一部を簡体字・ハングルに置き換えた依頼、[mixed-ja-coding.json](../scripts/prompts/mixed-ja-coding.json) は同じ置き換えをした簡単な Python の課題である。生成 code は実行しない。
+
+```sh
+scripts/tf-serve.sh "$RUN/coding-pruned-v2-server.log" outputs/models/flash-next-ja-en-coding-v2 \
+  sh -c 'python3 scripts/probe_replies.py "$TF_BASE" "$0/test-data" scripts/prompts/mixed-ja-coding.json "$0/coding-pruned-v2.jsonl" 1000' "$RUN"
+python3 scripts/tf_acceptance.py "$RUN/coding-pruned-v2-server.log" "$RUN/coding-pruned-v2.jsonl"
+```
+
 ## 2026-10-06 の実行確認
 
 固定 Qwen snapshot を 512 MiB JVM heap で加工し、K=128,803、全 1,891 tensors の byte 対応、payload 44,790,761,728 bytes、参照 tokenizer の検証に成功した。未対象の 7 shards は APFS clone。論理 model bytes は 44,855,965,826 → 44,795,576,221、payload 削減は 53,298,432 bytes。

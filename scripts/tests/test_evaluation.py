@@ -317,10 +317,13 @@ class EvaluationTests(unittest.TestCase):
                                  {"id": "leak", "samples": [usage(6), usage(8)]}]}
         bench = {"rows": [{"prompt": "ja", "draft": True, "trial": 0, "completion_tokens": 5},
                           {"prompt": "ja", "draft": False, "trial": 0, "completion_tokens": 5}]}
-        sent = list(tf_acceptance.synthetic_requests(synthetic)) + list(tf_acceptance.bench_requests(bench))
-        self.assertEqual([name for _, name, _ in sent], ["tool", "tool/followup", "leak#0", "leak#1", "bench:ja/mtp#0", "bench:ja/serial#0"])
+        probe = [{"case": "ko_fix", "setting": "t0", **usage(3)}]
+        sent = (list(tf_acceptance.synthetic_requests(synthetic)) + list(tf_acceptance.bench_requests(bench))
+                + list(tf_acceptance.probe_requests(probe)))
+        self.assertEqual([name for _, name, _ in sent],
+                         ["tool", "tool/followup", "leak#0", "leak#1", "bench:ja/mtp#0", "bench:ja/serial#0", "ko_fix/t0"])
         logged = tf_acceptance.log_requests(["noise", line(4, 2, 2, 3), line(2, 1, 1, 1), line(6, 4, 2, 6), line(8, 4, 4, 6),
-                                             line(5, 2, 3, 3), line(5, 5, 0, 0)])
+                                             line(5, 2, 3, 3), line(5, 5, 0, 0), line(3, 1, 2, 2)])
         totals = tf_acceptance.totals(tf_acceptance.attribute(logged, sent))
         self.assertEqual(totals["leak"]["accepted"], 6)
         self.assertEqual(totals["leak"]["proposed"], 12)

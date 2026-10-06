@@ -2,7 +2,7 @@
 """Attribute the experimental server's per-request MTP statistics to the requests that produced them.
 
 The server logs one `done req-… tokens=N … rounds=R accepted=A/P` line per request. Requests must have been sent one at a
-time; the result files are given in the order they were sent (synthetic results JSON, tf_bench.py JSON) and
+time; the result files are given in the order they were sent (synthetic results JSON, tf_bench.py JSON, probe_replies.py JSONL) and
 every request's completion-token count must match its log line.
 Usage: tf_acceptance.py <server log> <result file>... [--json <new output.json>]
 """
@@ -42,7 +42,14 @@ def bench_requests(result):
         yield name, f"{name}#{row['trial']}", {"usage": {"completion_tokens": row["completion_tokens"]}}
 
 
+def probe_requests(rows):
+    for row in rows:
+        yield row["case"], f"{row['case']}/{row['setting']}", row
+
+
 def requests(path):
+    if path.suffix == ".jsonl":
+        return list(probe_requests(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line))
     result = json.loads(path.read_text(encoding="utf-8"))
     return list(bench_requests(result) if "rows" in result else synthetic_requests(result))
 
