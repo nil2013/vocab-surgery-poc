@@ -1,4 +1,4 @@
-package vocabsurgery.io
+package me.nsmr.vocabsurgery.io
 
 import java.io.ByteArrayOutputStream
 import java.nio.{ByteBuffer, ByteOrder}
@@ -7,7 +7,7 @@ import java.nio.charset.{CodingErrorAction, StandardCharsets}
 import java.nio.file.{Files, Path, StandardOpenOption}
 import java.security.MessageDigest
 import scala.util.Using
-import vocabsurgery.core.*
+import me.nsmr.vocabsurgery.core.*
 
 /** Bounded metadata reads and byte-range operations. These never load a checkpoint. */
 object FileIO:

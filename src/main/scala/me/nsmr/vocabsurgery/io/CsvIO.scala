@@ -1,4 +1,4 @@
-package vocabsurgery.io
+package me.nsmr.vocabsurgery.io
 
 import java.io.StringReader
 import java.nio.file.Path

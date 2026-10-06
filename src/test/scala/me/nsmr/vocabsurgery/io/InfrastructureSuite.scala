@@ -1,10 +1,10 @@
-package vocabsurgery.io
+package me.nsmr.vocabsurgery.io
 
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.{Files, Path, StandardOpenOption}
 import scala.util.Using
-import vocabsurgery.core.*
+import me.nsmr.vocabsurgery.core.*
 
 class InfrastructureSuite extends munit.FunSuite:
   private def temporary[A](f: Path => A): A =

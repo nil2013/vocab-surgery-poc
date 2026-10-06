@@ -1,4 +1,4 @@
-package vocabsurgery.core
+package me.nsmr.vocabsurgery.core
 
 /** A Unicode scalar value. Surrogates are not valid code points in this type. */
 opaque type CodePoint = Int

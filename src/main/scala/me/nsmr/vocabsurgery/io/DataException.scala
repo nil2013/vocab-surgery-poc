@@ -1,4 +1,4 @@
-package vocabsurgery.io
+package me.nsmr.vocabsurgery.io
 
 import java.io.IOException
 import java.nio.file.{NoSuchFileException, Path}

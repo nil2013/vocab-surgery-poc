@@ -1,4 +1,4 @@
-package vocabsurgery.io
+package me.nsmr.vocabsurgery.io
 
 import io.circe.{Json, JsonObject}
 import io.circe.jawn.JawnParser
