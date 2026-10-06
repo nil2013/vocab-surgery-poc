@@ -333,6 +333,8 @@ checkpoint は metadata、tensor の shape・dtype・ファイル位置などで
 
 完了条件は、漢字一覧と対象 snapshot の metadata をロードできること、小さな合成ファイルで I/O を検証できること、不正形式・欠落ファイル・範囲外 offsets 等の診断を返せることである。
 
+第一工程は実装済み。Scala 3.3.8／sbt 2.0.10、Apache Commons CSV、Circe を使用し、6 種類の漢字 loader、モデル metadata と safetensors header の loader、共通の bounded I/O を整備した。ローカル snapshot の 9 shards・1,891 tensors の metadata 検査を含む全 23 テストと Scaladoc 生成を確認した。実行方法は [README](../README.md)、責務と I/O 制約は [インフラ層の設計](../docs/INFRASTRUCTURE.md) に記載する。pruning と checkpoint 加工の処理機構は後続工程で実装する。
+
 ### ドメイン概念と操作体系の整備
 
 漢字集合の統合・NFC 正規化・包含判定、token surface の復元・分類・保護判定、BPE merge の整合化、projection の生成、モデルと metadata の更新計画などを、ファイル I/O に依存しない操作として定義する。他のデータについても同じ方針で操作を整備する。
