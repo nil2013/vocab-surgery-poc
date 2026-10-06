@@ -92,6 +92,8 @@ scripts/vocab-surgery verify --manifest "$RUN/manifest.json" --python "$EVAL_PYT
 
 helper はケースと hash、submodule revision、server・package情報、全応答、tokenization、同じ case / seed の変化、集計を `outputs` に保存する。upstream の runner は submodule 内の `results` を更新するため、この比較では使わない。合成テストの固定 Python harness は upstream から読み、[既存の sandbox](../scripts/code_checks.py) 内で実行する。replay の tool calls は記録するだけで、モデルが指示した操作を実行しない。合成 tool test のみ固定の結果を返す。
 
+ローカルの tokenization 検査では、履歴の tool arguments の JSON strings を object にしたコピーを template に渡す。oMLX 側も request を template に渡す前にこの変換を行う。元ケースと API に送る履歴は変更しない。
+
 `test-data` の leak は JIS X 0213 / Python Unicode と文脈内文字の除外による指標であり、surgery の ICU policy predicate とは別である。replay は `stop` かつ text がある応答だけを concluded として言語・混入を集計し、`tool_calls` / `length` を別に数える。合成の PASS は指定の文字一致・keywords・code harness 等の判定で、日本語品質の人による評価を代替しない。失敗時は部分 JSONL を保持して停止し、新しい出力先で再実行する。
 
 ## 2026-10-06 の実行確認

@@ -41,6 +41,22 @@ def stream_case(case):
             **({"tools": case["tools"]} if case.get("tools") else {})}
 
 
+def template_messages(messages):
+    # oMLX parses OpenAI argument strings before applying the Qwen template.
+    # Normalize only this local rendering copy; the API request stays unchanged.
+    result = json.loads(json.dumps(messages))
+    for message in result:
+        for call in message.get("tool_calls", []):
+            function = call.get("function", call)
+            arguments = function.get("arguments", {})
+            if isinstance(arguments, str):
+                arguments = json.loads(arguments)
+            if not isinstance(arguments, dict):
+                raise ValueError("historical tool arguments must be a JSON object")
+            function["arguments"] = arguments
+    return result
+
+
 def score_synthetic(case, response, checks):
     text, kind = response["text"], case["kind"]
     if kind == "exact":
@@ -167,7 +183,7 @@ def run(args):
         if seed != (case.get("seeds", [0])[0] if group == "synthetic" else 0):
             continue
         request = case if group == "synthetic" else case["request"]
-        rendered = [t.apply_chat_template(request["messages"], tools=request.get("tools") or None,
+        rendered = [t.apply_chat_template(template_messages(request["messages"]), tools=request.get("tools") or None,
                                          tokenize=False, add_generation_prompt=True) for t in hf]
         if rendered[0] != rendered[1]:
             raise ValueError("chat template rendering changed")

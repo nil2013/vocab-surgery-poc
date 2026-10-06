@@ -149,6 +149,18 @@ class EvaluationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 evaluate_testdata.paired_changes([row], after)
 
+    def test_testdata_template_parses_argument_strings_without_changing_api_input(self):
+        messages = [{"role": "assistant", "content": None, "tool_calls": [
+            {"function": {"name": "read_file", "arguments": '{"path":"設定.py"}'}}]}]
+        normalized = evaluate_testdata.template_messages(messages)
+        self.assertEqual(normalized[0]["tool_calls"][0]["function"]["arguments"], {"path": "設定.py"})
+        self.assertIsInstance(messages[0]["tool_calls"][0]["function"]["arguments"], str)
+        self.assertEqual(evaluate_testdata.template_messages(normalized), normalized)
+        for arguments in ["[]", "not-json"]:
+            messages[0]["tool_calls"][0]["function"]["arguments"] = arguments
+            with self.assertRaises(ValueError):
+                evaluate_testdata.template_messages(messages)
+
     @unittest.skipUnless(Path("test-data/cases/synthetic/suite.json").is_file() and Path("/usr/bin/sandbox-exec").is_file(), "test-data and macOS sandbox required")
     def test_testdata_fixed_python_harness_runs_restricted_and_fails_wrong_code(self):
         suite, _, checks, _ = evaluate_testdata.load_data(Path("test-data"))
