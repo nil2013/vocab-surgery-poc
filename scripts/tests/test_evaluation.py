@@ -24,6 +24,8 @@ try:
     import greek_fragments
 except ImportError:
     greek_fragments = None
+import tf_acceptance
+import tf_bench
 
 spec = importlib.util.spec_from_file_location("make_suite", SCRIPTS / "make-suite.py")
 make_suite = importlib.util.module_from_spec(spec)
@@ -305,6 +307,36 @@ class EvaluationTests(unittest.TestCase):
             (model / "vocab.json").unlink()
             with self.assertRaises(FileNotFoundError):
                 check_tokenizer.check_files(source, model, mapping)
+
+    def test_tf_acceptance_follows_sending_order_and_rejects_misalignment(self):
+        def line(tokens, rounds, accepted, proposed):
+            return (f"[tensorfold] done req-1 prompt=9 cached=0 thinking=False tokens={tokens} sha=0 finish=stop "
+                    f"tok/s=50.0 ttft=0.1s prefill=0.1s rounds={rounds} accepted={accepted}/{proposed}")
+        usage = lambda n: {"usage": {"completion_tokens": n}}
+        synthetic = {"results": [{"id": "tool", "response": usage(4), "followup": usage(2)},
+                                 {"id": "leak", "samples": [usage(6), usage(8)]}]}
+        bench = {"rows": [{"prompt": "ja", "draft": True, "trial": 0, "completion_tokens": 5},
+                          {"prompt": "ja", "draft": False, "trial": 0, "completion_tokens": 5}]}
+        sent = list(tf_acceptance.synthetic_requests(synthetic)) + list(tf_acceptance.bench_requests(bench))
+        self.assertEqual([name for _, name, _ in sent], ["tool", "tool/followup", "leak#0", "leak#1", "bench:ja/mtp#0", "bench:ja/serial#0"])
+        logged = tf_acceptance.log_requests(["noise", line(4, 2, 2, 3), line(2, 1, 1, 1), line(6, 4, 2, 6), line(8, 4, 4, 6),
+                                             line(5, 2, 3, 3), line(5, 5, 0, 0)])
+        totals = tf_acceptance.totals(tf_acceptance.attribute(logged, sent))
+        self.assertEqual(totals["leak"]["accepted"], 6)
+        self.assertEqual(totals["leak"]["proposed"], 12)
+        self.assertEqual(totals["tool"]["tokensPerRound"], 2.0)
+        self.assertNotIn("bench:ja/serial", totals)
+        with self.assertRaises(ValueError):
+            tf_acceptance.attribute(logged[:-1], sent)
+        with self.assertRaises(ValueError):
+            tf_acceptance.attribute([dict(logged[0], tokens=9)] + logged[1:], sent)
+
+    def test_tf_bench_summary_leaves_out_warmups(self):
+        rows = [{"prompt": p, "draft": d, "trial": t, "warmup": t == 0, "ttft": 0.1, "total": 1.1, "decode_tps": 10.0 * (t + 1),
+                 "completion_tokens": 4, "chars": 10} for p in tf_bench.PROMPTS for d in (True, False) for t in range(tf_bench.TRIALS)]
+        summary = tf_bench.summarize(rows)
+        self.assertEqual(summary["ja/mtp"]["decode_tps_median"], 30.0)
+        self.assertEqual(len(summary["code/serial"]["completion_tokens"]), tf_bench.TRIALS - 1)
 
     @unittest.skipUnless(Path("/usr/bin/sandbox-exec").is_file(), "macOS coding execution only")
     def test_python_fixed_tests_fail_wrong_code_and_deny_writes_outside_temporary_directory(self):
