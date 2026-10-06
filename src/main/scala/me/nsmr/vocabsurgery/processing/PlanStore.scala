@@ -18,6 +18,7 @@ final case class PreparedPlan(source: ModelSnapshot, domain: ModelUpdatePlan, se
 
 /** Saved plans are validated by recomputation, never executed as arbitrary serialized byte ranges. */
 object PlanStore:
+  /** Load metadata, fingerprint input structure and compute domain operations without reading tensor payloads. */
   def prepare(source: Path, kanjiDirectory: Path, settings: PolicySettings): PreparedPlan =
     val model = SnapshotLoader.load(source.toRealPath())
     val referencePath = kanjiDirectory.toRealPath()
@@ -25,6 +26,7 @@ object PlanStore:
     val domain = ModelOperations.plan(model, settings.domain(japanese), settings.parameterCount)
     PreparedPlan(model, domain, settings, referencePath, ProcessingIO.revision(referencePath), InputInventory.capture(model))
 
+  /** Recompute operations from current inputs and reject any inventory, reference or saved-plan mismatch. */
   def loadVerified(path: Path): PreparedPlan =
     val json = JsonIO.read(path)
     def field(name: String) = JsonFields.field(json, name, path, "plan")

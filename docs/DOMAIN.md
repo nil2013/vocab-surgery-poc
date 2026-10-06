@@ -1,6 +1,6 @@
 # 第二工程のドメイン操作
 
-この層は、読み込んだ metadata から語彙の削減方針、ID mapping、tensor と metadata の更新計画を作る。操作はファイル I/O を行わず、immutable な入力と結果を扱う。対象 snapshot の読み込みには [インフラ層](INFRASTRUCTURE.md) の loaders を使う。checkpoint のコピー・行抽出の実行・staging と CLI は後続工程である。
+この層は、読み込んだ metadata から語彙の削減方針、ID mapping、tensor と metadata の更新計画を作る。操作はファイル I/O を行わず、immutable な入力と結果を扱う。対象 snapshot の読み込みには [インフラ層](INFRASTRUCTURE.md) の loaders を使い、checkpoint のコピー・行抽出・staging は [処理機構](PROCESSING.md) が担当する。
 
 ## 操作と型
 
@@ -26,7 +26,7 @@ ICU4J 78.3 の bundled Unicode 17.0.0 を使用し、Script、General_Category�
 
 参照集合は採用した 6 source の字体 fields の和集合 `raw` と、各 scalar を NFC にした `normalized`、指定した `additional` の和である。元字体を捨てず、正規化後の字体にも収録元を紐づける。source hashes と missing-text diagnostics を保持し、画像や説明文から字を補わない。`fromCharacters` は合成テストや明示した小集合の実験用 factory である。
 
-初期の禁止判定は Arabic／Cyrillic／Hangul、参照集合外の `Script=Han && General_Category=Lo`、明示した code points の和を使う。Han の数詞・踊り字・部首・variation selectors を Han 漢字扱いしない。追加の Script／文字／保護 ID／保護 content は `PruningPolicy` の typed fields で指定する。policy のファイル形式と CLI はまだ実装していない。
+初期の禁止判定は Arabic／Cyrillic／Hangul、参照集合外の `Script=Han && General_Category=Lo`、明示した code points の和を使う。Han の数詞・踊り字・部首・variation selectors を Han 漢字扱いしない。追加の Script／文字／保護 ID／保護 content は `PruningPolicy` の typed fields で指定する。JSON policy の形式は [PROCESSING.md](PROCESSING.md) を参照。`forbidden(CodePoint)` と `forbidden(TokenSurface)` は同じ predicate を使い、評価時の generated scalar 判定にも利用する。手動保護 content は encoded key と literal added token に加え、decoded surface でも照合する。
 
 日本語漢字の収録は Han 判定にだけ作用する。日本語と禁止文字を含む混在 token も禁止文字を理由に直接削除できる。明示した token 保護は削除判定より優先する。
 
@@ -38,7 +38,7 @@ ByteLevel は 256 byte values と encoded scalar values の全単射を用いる
 
 projection は残存旧 ID を昇順に並べ、`0..K-1` に写す。削除・未登録の重み行は `None`／JSON `null` とし、架空の token を追加しない。コンストラクタでも双方向性、順序、一意性を検査する。
 
-モデル更新計画の対応範囲は、NFC と ByteLevel を使う通常の連結型 BPE、`qwen3_next`、embedding と LM head が非共有のモデルである。affixed merges、byte fallback、ignore-merges、未知の decoder／normalizer は拒否する。モデルの `unk_token`、tokenizer config の既知の token strings、template 中の固定 `<|...|>` 参照も収集する。Jinja の実行や動的に組み立てた token の解決、同梱 parser の点検は後続工程で検証する。
+モデル更新計画の対応範囲は、NFC と ByteLevel を使う通常の連結型 BPE、`qwen3_next`、embedding と LM head が非共有のモデルである。affixed merges、byte fallback、ignore-merges、未知の decoder／normalizer は拒否する。モデルの `unk_token`、tokenizer config の既知の token strings、template 中の固定 `<|...|>` 参照も収集する。Jinja の実行と同梱 parser の点検は [参照検証 helper](../scripts/check_tokenizer.py) が担当する。動的に構築する token 名の一般的な静的解決は行わない。
 
 `TokenizerRewrite` は型表現と元 JSON の整合性も確認する。元 merges が string か pair array かを保持し、normalizer／pre-tokenizer／decoder と未知 fields、added token の属性を維持する。
 
@@ -92,4 +92,4 @@ val savedBytes = plan.savedPayloadBytes.longValue
 
 追加の参照 tokenizer 検証では、oMLX 環境の `tokenizers 0.23.2` が更新済み JSON をロードでき、参照漢字 10,086 字の NFC が ICU と一致すること、日本語・Python／Scala／TypeScript・FIM・tool-call 等の 8 入力が round trip することを確認した。再実行の opt-in property は [README](../README.md) を参照する。Python process の memory は JVM の 512 MiB 上限に含まれない。
 
-第一・第二工程の型、loader、純粋操作、更新計画とテストを整備済み。重みの実コピー・加工モデルの生成、surviving logits、oMLX 推論品質・速度・memory の評価は第三工程以降で検証する。
+第一・第二工程の型、loader、純粋操作、更新計画とテストを整備済み。重みの実コピーと全面検証は [PROCESSING.md](PROCESSING.md)、surviving logits と oMLX 品質・速度・memory の評価手順と実行結果は [EVALUATION.md](EVALUATION.md) を参照。

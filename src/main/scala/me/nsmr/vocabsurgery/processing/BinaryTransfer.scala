@@ -35,6 +35,7 @@ final case class TensorVerification(name: String, comparedBytes: Long, sourceSha
 object BinaryTransfer:
   val DefaultBufferBytes = 1024 * 1024
 
+  /** Create an independent clone or bounded full-file copy and return the recorded transfer method. */
   def copyFile(source: Path, destination: Path, cloner: FileCloner = FileCloner.platform,
       bufferBytes: Int = DefaultBufferBytes): String =
     Diagnostics.check(!Files.exists(destination, LinkOption.NOFOLLOW_LINKS), destination, "copy", "output already exists")
@@ -45,6 +46,7 @@ object BinaryTransfer:
       destination, "copy", "output must be an independent regular file of equal size")
     method
 
+  /** Create a shard from its preserved header JSON and positional copy spans; never dequantize rows. */
   def rewrite(shard: ShardProjection, destination: Path, bufferBytes: Int = DefaultBufferBytes): Unit = Diagnostics.guard(destination, "shard rewrite") {
     require(bufferBytes > 0 && bufferBytes <= FileIO.MaxTransferBuffer, "invalid buffer size")
     val prefix = SafetensorsIO.encodeHeaderJson(shard.header)

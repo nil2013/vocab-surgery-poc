@@ -25,14 +25,21 @@ final case class VerificationResult(tensors: Vector[TensorVerification], referen
 
 /** Execute a recomputed plan in staging, verify every output tensor, then publish without replacement. */
 object CheckpointProcessor:
+  /** External tokenizer validation must return a JSON object with `passed=true` or throw.
+    * Production callers use the offline Hugging Face helper; synthetic tests supply an explicit contract.
+    */
   type ReferenceValidator = (PreparedPlan, Path) => Json
 
+  /** Save inspection metadata to a new run directory without reading weight payloads. */
   def inspect(source: Path, runDirectory: Path, options: ProcessingOptions = ProcessingOptions()): Path =
     val json = PlanReports.inspection(source)
     val directory = ProcessingIO.createDirectory(options.outputRoot, runDirectory, Vector(source))
     ProcessingIO.write(directory.resolve("inspection.json"), json)
     directory
 
+  /** Save a recomputable plan and analysis, returning its path.
+    * Accept a new run or an inspection-only run for the same source; never replace an existing plan.
+    */
   def plan(source: Path, kanji: Path, settings: PolicySettings, runDirectory: Path,
       options: ProcessingOptions = ProcessingOptions()): Path =
     val prepared = PlanStore.prepare(source, kanji, settings)
@@ -48,6 +55,7 @@ object CheckpointProcessor:
     PlanReports.write(prepared, directory)
     directory.resolve("plan.json")
 
+  /** Worst-case output bytes plus reserve, without assuming any copy-on-write clone succeeds. */
   def requiredBytes(plan: PreparedPlan, reserve: Long): Long =
     val replacements = metadata(plan.domain)
     val shardNames = plan.domain.shards.map(s => s.source.path.getFileName.toString).toSet
@@ -57,6 +65,11 @@ object CheckpointProcessor:
     val jsonBytes = replacements.values.foldLeft(0L)((sum, json) => Math.addExact(sum, (ProcessingIO.canonical(json) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8).length.toLong))
     Vector(plan.domain.payloadBytes.longValue, headers, assets, jsonBytes, reserve).foldLeft(0L)(Math.addExact)
 
+  /** Recompute the saved plan, create staging files, verify all bytes and publish a new model.
+    * Write manifest and verification beside the plan; publish without replacing an existing destination.
+    * Failures after staging begins retain staging and a diagnostic rather than a completed model.
+    * @return the validated absolute output path
+    */
   def applyPlan(planPath: Path, modelOutput: Path, referenceValidator: ReferenceValidator,
       options: ProcessingOptions = ProcessingOptions()): Path =
     val prepared = PlanStore.loadVerified(planPath)

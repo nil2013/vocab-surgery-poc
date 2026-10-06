@@ -10,7 +10,7 @@
 
 ユーザー確認済みの事項は、上記の初期対象、一覧外の漢字を簡体字・繁体字と推定してよいこと、日本語の説明・要約、Python／Scala／TypeScript のコード生成、FIM、tool-call を評価すること、この Mac 上の oMLX を使用することである。実装言語、直接の checkpoint 加工、再量子化を避けることは `TASK.md` の要件とする。
 
-本案では、未登録の重み行の削除、BPE 到達不能 token の扱い、CLI、成果物形式、評価件数と閾値を具体化している。これらは実装前の提案値とし、最後の「仕様確定に残る事項」にまとめる。
+本案では、未登録の重み行の削除、BPE 到達不能 token の扱い、CLI、成果物形式、評価件数と閾値を具体化している。初期値で実装した事項も、ユーザー確認済みの要求と区別し、最後の「仕様確定に残る事項」にまとめる。
 
 ## 対象モデルと入力条件
 
@@ -202,14 +202,14 @@ shards 1 と 9 は、対象 6 tensors を縮小して再構築し、それ以外
 
 ## CLI と出力構成
 
-次の CLI は実装時のインターフェース案であり、現時点では未実装である。
+次の CLI は実装済み。repository root で `sbt --batch stageCli` 後に launcher を使う。setup と一連の操作は [README](../README.md)、policy と出力制約は [PROCESSING.md](../docs/PROCESSING.md)、評価の前提と helper は [EVALUATION.md](../docs/EVALUATION.md) を参照する。
 
 ```text
-vocab-surgery inspect  --source <snapshot> --run-dir outputs/runs/<run-id>
-vocab-surgery plan     --source <snapshot> --policy <policy.json> --run-dir <run-dir>
-vocab-surgery apply    --plan <run-dir>/plan.json --model-out outputs/models/<model-name>
-vocab-surgery verify   --manifest <run-dir>/manifest.json
-vocab-surgery evaluate --manifest <run-dir>/manifest.json --suite <suite.jsonl> --omlx-url <url>
+scripts/vocab-surgery inspect  --source <snapshot> --run-dir outputs/runs/<run-id>
+scripts/vocab-surgery plan     --source <snapshot> --policy <policy.json> --run-dir <run-dir>
+scripts/vocab-surgery apply    --plan <run-dir>/plan.json --model-out outputs/models/<model-name> --python <interpreter>
+scripts/vocab-surgery verify   --manifest <run-dir>/manifest.json --python <interpreter>
+scripts/vocab-surgery evaluate --manifest <run-dir>/manifest.json --suite evaluation/default-suite.jsonl --omlx-url <url> --baseline-model <name> --pruned-model <name> --evaluation-out <new-dir> --python <interpreter>
 ```
 
 `inspect` と `plan` は重みを出力しない。`apply` は plan に記録した snapshot、設定、metadata hash を照合し、入力が変わっていれば停止する。policy は Unicode 版、対象 Scripts、Han 漢字の定義、日本語保護集合、追加 code points、protected tokens、未登録行 policy を含む。submodule commit、採用ファイル、各ファイルの hash、NFC 条件、追加保護集合も effective policy に記録する。漢字 policy の入力が欠落・変更していれば、Han pruning を黙って省略せず停止する。
@@ -244,8 +244,10 @@ outputs/
       merge-cleanup.json
       manifest.json
       verification.json
+      publication.json
+      summary.json
+      kanji-missing-texts.jsonl
       environment.json
-      logs/
       evaluation/
         suite.jsonl
         tokenizer.jsonl
@@ -253,12 +255,14 @@ outputs/
         baseline.jsonl
         pruned.jsonl
         metrics.json
+        ratings-template.json
+        helper.log
         REPORT.md
 ```
 
 `tokens.jsonl` は旧 ID、新 ID、surface または raw bytes、保護理由、直接／間接削除理由、対象 code points を含む。manifest は source path／revision、入力・出力 hash、設定 hash、tool version、shard copy 方法、行数・byte 数を記録する。run ID と測定時刻は sidecar に保存し、モデル bytes の決定性を崩さない。
 
-既存の出力 directory は上書きしない。加工は `outputs/.staging/<run-id>` に行い、静的検証後に最終 model directory へ rename する。失敗時は staging と診断を残し、完成モデルとして公開しない。コピー fallback を含む必要容量を事前に見積もり、空きが不足すれば開始しない。
+既存の出力 directory は上書きしない。ただし `plan` は同じ source の `inspection.json` のみを持つ run を拡張できる。加工は `outputs/.staging/<UUID>` に行い、静的・参照検証後に最終 model directory へ rename する。失敗時は staging と診断を残し、完成モデルとして公開しない。コピー fallback を含む必要容量を事前に見積もり、空きが不足すれば開始しない。
 
 ## 正しさの検証
 
@@ -333,7 +337,7 @@ checkpoint は metadata、tensor の shape・dtype・ファイル位置などで
 
 完了条件は、漢字一覧と対象 snapshot の metadata をロードできること、小さな合成ファイルで I/O を検証できること、不正形式・欠落ファイル・範囲外 offsets 等の診断を返せることである。
 
-第一工程は実装済み。Scala 3.3.8／sbt 2.0.10、Apache Commons CSV、Circe を使用し、6 種類の漢字 loader、モデル metadata と safetensors header の loader、共通の bounded I/O を整備した。第一工程完了時には、ローカル snapshot の 9 shards・1,891 tensors の metadata 検査を含む全 23 テストと Scaladoc 生成を確認した。実行方法は [README](../README.md)、責務と I/O 制約は [インフラ層の設計](../docs/INFRASTRUCTURE.md) に記載する。checkpoint 加工の処理機構は後続工程で実装する。
+第一工程は実装済み。Scala 3.3.8／sbt 2.0.10、Apache Commons CSV、Circe を使用し、6 種類の漢字 loader、モデル metadata と safetensors header の loader、共通の bounded I/O を整備した。第一工程完了時には、ローカル snapshot の 9 shards・1,891 tensors の metadata 検査を含む全 23 テストと Scaladoc 生成を確認した。実行方法は [README](../README.md)、責務と I/O 制約は [インフラ層の設計](../docs/INFRASTRUCTURE.md) に記載する。
 
 ### ドメイン概念と操作体系の整備
 
@@ -353,6 +357,8 @@ bounded buffer、64-bit のファイル位置、部分 read／write、APFS clone
 
 完了条件は、小さな合成 checkpoint の加工・検証が通ること、実モデルの inspect／plan を生成できること、tokenizer と重みの加工を前述のメモリ方針で実行できることである。
 
+第三工程は実装済み。計画の保存と入力からの再計算、bounded row copy、APFS clone と fallback、容量チェック、staging、全 tensor 比較、全 file hash、参照 tokenizer 検証後の公開を整備した。固定 snapshot の 9 shards を実加工し、全 1,891 tensors／44,790,761,728 payload bytes の対応を確認した。設計と失敗・再実行条件は [PROCESSING.md](../docs/PROCESSING.md) に記載する。
+
 ### CLI と scripts と利用資料の実装
 
 CLI は引数の解釈、処理機構の呼び出し、進捗・結果・エラーの表示、終了 status を担当する。helper scripts は必要な CLI 操作をまとめ、ドメイン操作や加工ロジックを重複実装しない。
@@ -360,6 +366,10 @@ CLI は引数の解釈、処理機構の呼び出し、進捗・結果・エラ�
 help コマンドの案内、ユーザドキュメント、仕様・設計の詳細資料、Scaladoc を整備する。Scaladoc、invariant、設計上の判断は各実装段階で記録し、この段階で利用手順と案内を仕上げる。資料には入力・出力、前提条件、操作例、失敗時の診断と再実行方法を含める。
 
 完了条件は、利用者が資料と help を参照して inspect、plan、apply、verify、evaluate を実行し、成果物と結果を確認できることである。
+
+第四工程は実装済み。5 commands、help、launcher、一連の surgery script、固定 100 件の suite、参照 tokenizer／逐次 logits／oMLX stream／実行 code tests／目視レビュー helper、ユーザ・設計資料と Scaladoc を整備した。引数不正、helper 失敗と timeout、不完全 stream、cache hit、誤った code、数値 gate 超過等の unhappy paths を検証する。
+
+実モデルでは 7 件の oMLX 小 suite と短入力の速度測定、4 件の同一 ID 測定を実行した。logits は入力 `a` の 1 要素が初期許容差を超えたため不合格と記録した。固定 100 件の全件評価と目視採点は未実施であり、ツール実装の完了と TASK の全 PoC 目的達成を区別する。現在の測定結果と制限は [EVALUATION.md](../docs/EVALUATION.md) に記載する。
 
 ### 検証の進め方
 

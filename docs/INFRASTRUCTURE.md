@@ -60,7 +60,7 @@ header は `{` から始まる JSON とし、`__metadata__` は string map に�
 
 第一工程の dtype 対応は BOOL、I8／U8、I16／U16／F16／BF16、I32／U32／F32、I64／U64／F64。未知の dtype は `UnsupportedFormat` とし、誤った byte 幅を仮定しない。
 
-`encodeHeader` は supplied tensor metadata から順序を固定した JSON と space padding、length prefix を生成する。第二工程の `ShardProjection.header` は元 header の未知 fields も保持する更新計画なので、将来の writer はこれを捨てずに使用する。payload を書く機能や tensor row slicing の実行は第三工程で実装する。
+`encodeHeader` は supplied tensor metadata から順序を固定した JSON と space padding、length prefix を生成する。`encodeHeaderJson` は `ShardProjection.header` に保持した未知 fields を捨てずに同じ形式で符号化する。payload の書き込みと tensor row slicing は [第三工程の処理機構](PROCESSING.md) が実行する。
 
 ## 検証済みの範囲
 

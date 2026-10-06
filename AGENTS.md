@@ -7,7 +7,9 @@ Purpose: Qwen3-Coder-Next MLX vocabulary and embedding / LM-head pruning with oM
 - Use [README.md](README.md) for setup, loader experimentation with `sbt console`, and the exact opt-in local snapshot test command.
 - Use [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) for loader, data representation, diagnostic, or binary I/O changes.
 - Use [docs/DOMAIN.md](docs/DOMAIN.md) for Unicode / kanji policy, BPE cleanup, projection, token-reference schemas, or pure model-update plans.
-- Use [outputs/SPEC.md](outputs/SPEC.md) for pruning, projection, surgery, metadata rewriting, or evaluation changes. Distinguish agreed requirements from proposed values; verify proposed CLI examples against README / source before invoking them.
+- Use [docs/PROCESSING.md](docs/PROCESSING.md) for saved plans, input inventories, output boundaries, staging, publication, or full checkpoint verification.
+- Use [docs/EVALUATION.md](docs/EVALUATION.md) for oMLX helpers, fixed suites, metrics, code execution, or evaluation conclusions. Keep a failed logits gate and pending human ratings visible; do not infer TASK completion from a successful command.
+- Use [outputs/SPEC.md](outputs/SPEC.md) when changing surgery requirements or acceptance criteria. Distinguish agreed requirements from initial proposed thresholds.
 - Use [kanji-data/README.md](kanji-data/README.md) when changing which reference files or fields are consumed.
 
 ## Input and output boundaries
@@ -23,6 +25,7 @@ Purpose: Qwen3-Coder-Next MLX vocabulary and embedding / LM-head pruning with oM
 - Preserve unknown fields in immutable Circe JSON, added-token attributes, and quantization overrides. Do not round-trip integer IDs or offsets through `Double`.
 - Stream checkpoint data with bounded buffers and checked `Long` arithmetic. Metadata loaders read headers / sizes, not tensor payloads. Safetensors offsets are payload-relative.
 - Keep create-new output semantics; staging / publication belongs in the processing layer. Preserve contextual `DataException` diagnostics.
+- Recompute saved plans against current inputs before execution; plan-time weight hashes cover headers only, while apply / verify record and check complete file hashes. CLI publication requires the external reference tokenizer check.
 - Slice packed weights, scales, and biases in identical projected row order, without re-quantization or Transformer / MoE changes.
 
 ## Verification
@@ -42,10 +45,14 @@ Run from the repository root with JDK 17+. Compiler warnings are errors. No sepa
 | Tokenizer rewriting / metadata ID schemas | `model.MetadataOperationsSuite`, `model.ModelOperationsSuite` |
 | Tensor / shard projection or model-update plans | `model.TensorOperationsSuite`, `model.ModelOperationsSuite` |
 | Safetensors layout / binary I/O | `model.SafetensorsSuite`, plus `model.ModelLoaderSuite` if snapshot behavior changes |
+| Plan persistence, transfer, staging, publication | `processing.ProcessingSuite` |
+| CLI dispatch, argument / helper failures | `cli.CliSuite` |
 
 - For build / dependency or cross-package changes, use `sbt --batch testFull`. In sbt 2, `test` is incremental; `clean;test` does not replace `testFull`.
 - When real-checkpoint coverage is needed, run `model.LocalSnapshotSuite` using the README's test-JVM property setup. It expects the recorded Qwen snapshot. Without `vocabSurgery.snapshot`, it skips: do not count this as coverage or auto-download weights. Reference tokenizer / NFC comparison additionally requires the explicit `vocabSurgery.tokenizersPython` property; do not count an unset property as that coverage.
 - Kanji tests need the submodule. Tests use a 512 MiB forked heap and sparse temporary files; retain these checks for memory-sensitive I/O.
+- After CLI or runtime dependency changes, run `sbt --batch stageCli` before using `scripts/vocab-surgery`; it launches staged jars, not current source.
+- For Python evaluation helper changes, use `python3 -m unittest discover -s scripts/tests -v`. Scala / TypeScript execution coverage requires `stageCli` and the explicit tool setup in EVALUATION.md; report skips. Shell launcher changes need `sh -n scripts/vocab-surgery scripts/run-surgery.sh`.
 - Run `sbt --batch doc` for Scaladoc changes. For prose-only changes, check links and `git diff --check`; Scala tests are unnecessary.
 
 Complete the scoped checks, report skipped integration coverage, and commit implementation changes in coherent, verified units as required by the specification.
