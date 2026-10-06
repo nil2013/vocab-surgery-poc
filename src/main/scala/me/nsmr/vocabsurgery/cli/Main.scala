@@ -13,7 +13,9 @@ final case class Arguments(command: String = "", source: Path = Path.of("."), ru
     policy: Option[Path] = None, plan: Path = Path.of("."), modelOutput: Path = Path.of("."),
     manifest: Path = Path.of("."), python: Path = Path.of("python3"), report: Option[Path] = None, suite: Path = Path.of("."),
     url: String = "", baselineModel: String = "", prunedModel: String = "", evaluationOutput: Path = Path.of("."),
-    ids: Path = Path.of("."), idsOutput: Path = Path.of("."), unicodeVersion: Option[String] = None, sha256: Option[String] = None,
+    ids: Path = Path.of("."), idsOutput: Path = Path.of("."), referenceName: String = "", referenceVersion: Option[String] = None, sha256: Option[String] = None,
+    profileSource: Option[Path] = None, profileText: Option[String] = None, kanjiDirectory: Path = Path.of("kanji-data"),
+    unihanDirectory: Option[Path] = None, jmdictDirectory: Option[Path] = None,
     apiKeyEnvironment: String = "OMLX_API_KEY", trials: Int = 5, warmups: Int = 1, timeout: Int = 3600, copyOnly: Boolean = false,
     serverEnvironment: Option[Path] = None)
 
@@ -45,10 +47,21 @@ object Main:
         opt[String]("manifest").required().action((v, c) => c.copy(manifest = Path.of(v))),
         opt[String]("ids").required().action((v, c) => c.copy(ids = Path.of(v))).text("Whitespace-separated source token IDs"),
         opt[String]("out").required().action((v, c) => c.copy(idsOutput = Path.of(v))).text("New file under the output root, one ID per line")),
-      cmd("fetch-unihan").action((_, c) => c.copy(command = "fetch-unihan"))
-        .text("Download Unihan variant data into <output root>/reference/unihan/<version>, checked by SHA-256").children(
-        opt[String]("unicode-version").action((v, c) => c.copy(unicodeVersion = Some(v))).text("Default: ICU's Unicode version"),
-        opt[String]("sha256").action((v, c) => c.copy(sha256 = Some(v))).text("Expected zip digest for a version without a built-in one")),
+      cmd("fetch-reference").action((_, c) => c.copy(command = "fetch-reference"))
+        .text("Download reference data (unihan, jmdict) into <output root>/reference/<name>/<version>, checked by SHA-256").children(
+        arg[String]("<name>").action((v, c) => c.copy(referenceName = v)).text(ReferenceFetch.sources.map(_.name).mkString(" | ")),
+        opt[String]("version").action((v, c) => c.copy(referenceVersion = Some(v))).text("unihan: Unicode version (default ICU's); jmdict: expected creation date"),
+        opt[String]("sha256").action((v, c) => c.copy(sha256 = Some(v))).text("Expected download digest when none is built in")),
+      cmd("profile-han").action((_, c) => c.copy(command = "profile-han"))
+        .text("Write static facts (kanji lists, Unihan variants, JMdict usage) for the Han characters of a vocabulary or text").children(
+        opt[String]("run-dir").required().action((v, c) => c.copy(runDirectory = Path.of(v))),
+        opt[String]("source").action((v, c) => c.copy(profileSource = Some(Path.of(v)))).text("Snapshot whose tokenizer vocabulary is profiled"),
+        opt[String]("text").action((v, c) => c.copy(profileText = Some(v))).text("Text whose characters are profiled"),
+        opt[String]("kanji-dir").action((v, c) => c.copy(kanjiDirectory = Path.of(v))).text("Default: kanji-data"),
+        opt[String]("unihan").action((v, c) => c.copy(unihanDirectory = Some(Path.of(v)))).text("Default: fetched Unihan of ICU's Unicode version"),
+        opt[String]("jmdict").action((v, c) => c.copy(jmdictDirectory = Some(Path.of(v)))).text("Default: newest fetched JMdict"),
+        checkConfig(c => if c.command == "profile-han" && c.profileSource.isDefined == c.profileText.isDefined
+          then failure("profile-han needs exactly one of --source and --text") else success)),
       cmd("evaluate").action((_, c) => c.copy(command = "evaluate")).text("Compare source and pruned models through an explicitly supplied oMLX server").children(
         manifest, python, opt[String]("suite").required().action((v, c) => c.copy(suite = Path.of(v))),
         opt[String]("omlx-url").required().action((v, c) => c.copy(url = v)),
@@ -67,7 +80,7 @@ object Main:
   def execute(args: Vector[String], options: ProcessingOptions = ProcessingOptions(), helpers: Path = Path.of("scripts"),
       out: PrintStream = System.out, err: PrintStream = System.err): Int =
     val normalized = if args.isEmpty then Vector("--help") else if args.head == "help" then args.tail :+ "--help" else args
-    if normalized.contains("--help") && (normalized.size == 1 || Set("inspect", "plan", "apply", "verify", "translate-ids", "fetch-unihan", "evaluate")(normalized.head)) then
+    if normalized.contains("--help") && (normalized.size == 1 || Set("inspect", "plan", "apply", "verify", "translate-ids", "fetch-reference", "profile-han", "evaluate")(normalized.head)) then
       out.println(OParser.usage(parser))
       return 0
     val (parsed, effects) = OParser.runParser(parser, normalized, Arguments())
@@ -103,7 +116,16 @@ object Main:
               }
               result
             case "translate-ids" => CheckpointProcessor.translateIds(config.manifest, config.ids, config.idsOutput, runtime)
-            case "fetch-unihan" => UnihanFetch.fetch(config.unicodeVersion.getOrElse(me.nsmr.vocabsurgery.unicode.UnicodeData.unicodeVersion), config.sha256, runtime)
+            case "fetch-reference" =>
+              val source = ReferenceFetch.sources.find(_.name == config.referenceName)
+                .getOrElse(throw IllegalArgumentException(s"unknown reference ${config.referenceName}; known: ${ReferenceFetch.sources.map(_.name).mkString(", ")}"))
+              ReferenceFetch.fetch(source, config.referenceVersion, config.sha256, runtime)
+            case "profile-han" =>
+              val (references, inputs) = HanProfile.load(HanReferencePaths(config.kanjiDirectory, config.unihanDirectory, config.jmdictDirectory), runtime.outputRoot)
+              val characters = config.profileSource.fold(HanProfile.fromText(config.profileText.get))(HanProfile.fromSnapshot)
+              HanProfile.write(characters, config.profileSource.isDefined, references,
+                inputs.mapObject(fields => config.profileSource.fold(fields)(source => fields.add("source", Json.fromString(source.toRealPath().toString)))),
+                config.runDirectory, config.profileSource.toVector :+ config.kanjiDirectory, runtime)
             case "evaluate" => evaluate(config, runtime, helpers)
             case _ => throw IllegalArgumentException("a command is required; use --help")
           out.println(ProcessingIO.canonical(result))

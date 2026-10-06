@@ -42,6 +42,18 @@ ICU4J 78.3 の bundled Unicode 17.0.0 を使用し、Script、General_Category�
 
 `CharacterPolicy.protectMath` の既定値は true。Math scalar は `forbidden(CodePoint)` で禁止理由を付けず、scalar と generated-text metrics の判定を共通にする。Math scalar のみで構成された token は保護理由 `math` で graph cleanup からも保護する。Math と非 Math の禁止文字を含む混在 token 全体を無条件に保護することはしない。Math 属性は人が数学で使う全文字の集合ではない。
 
+## 漢字の静的な判定
+
+`HanReferences.judge` は 1 字について、参照データから読める事実だけを `HanJudgment` に並べる。削除や保護の判断はしない。policy や目視確認が、この事実から判断する。
+
+| 項目 | 出典 |
+| --- | --- |
+| 日本語参照集合のどの source に入っているか、常用漢字か、`子の名に使える漢字` の区分 | kanji-data |
+| 簡体字形か（別字の繁体字を持つ）、繁体字形か（別字の簡体字を持つ）と、その対応字 | Unihan の `kTraditionalVariant`／`kSimplifiedVariant` |
+| JMdict の漢字見出しでの出現数（全体、非標準表記を除いた数、優先度付きの語の数）と例 | JMdict の `keb`、`ke_inf`（`iK oK rK sK` を非標準とする）、`ke_pri` |
+
+Unihan と JMdict は `scripts/vocab-surgery fetch-reference unihan|jmdict` で `outputs/reference/<name>/<版>/` に取得する。Unihan の版は ICU の Unicode 版、JMdict の版はファイル内の作成日。JMdict は版付きの URL がなく http でのみ配布されるので、取得時の SHA-256 を記録し、`verified=false` とする。`scripts/vocab-surgery profile-han --source <snapshot> --run-dir <dir>`（または `--text`）は、語彙やテキストに現れる漢字ごとの判定と、その字を含む token の数・例を `han-profile.jsonl` に、参照データの版と SHA-256 を `han-profile.json` に書く。
+
 ## Tokenizer と BPE
 
 分類と BPE cleanup は `TokenizerScheme` を通して key を復元する。`ByteLevelBpe` は 256 byte values と encoded scalar values の全単射を用いる。decode は元の bytes を保持し、不正な UTF-8 を replacement character に変換しない。scheme の基礎 key（`BaseToken`）、strict UTF-8 に戻せない lexical tokens、すべての added tokens、系列の必須 protocol、設定からの必須 ID／content、明示した token 保護を優先する。`special=false` の tool／FIM tokens も保護する。

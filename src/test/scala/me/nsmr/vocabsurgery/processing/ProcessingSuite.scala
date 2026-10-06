@@ -111,28 +111,94 @@ class ProcessingSuite extends munit.FunSuite:
     finally Using.resource(Files.walk(directory))(_.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.foreach(Files.delete))
   }
 
-  test("fetch-unihan stages, checks the digest, extracts only the variants and never replaces a fetched version") {
+  private def zipped(directory: Path, name: String, content: Array[Byte]): Path =
+    val zip = directory.resolve(s"$name.zip")
+    Using.resource(java.util.zip.ZipOutputStream(Files.newOutputStream(zip))) { out =>
+      out.putNextEntry(java.util.zip.ZipEntry(name))
+      out.write(content)
+      out.closeEntry()
+    }
+    zip
+
+  private def jmdict(directory: Path, created: String): Path =
+    val file = directory.resolve(s"JMdict-$created.gz")
+    val xml = s"""<?xml version="1.0" encoding="UTF-8"?>
+      |<!DOCTYPE JMdict [
+      |<!ELEMENT JMdict (entry*)>
+      |<!ENTITY rK "rarely used kanji form">
+      |<!ENTITY n "noun (common) (futsuumeishi)">
+      |]>
+      |<!-- JMdict created: $created -->
+      |<JMdict>
+      |<entry><ent_seq>1</ent_seq><k_ele><keb>痒み</keb><ke_pri>news1</ke_pri></k_ele><r_ele><reb>かゆみ</reb></r_ele><sense><pos>&n;</pos></sense></entry>
+      |<entry><ent_seq>2</ent_seq><k_ele><keb>洒落</keb></k_ele><k_ele><keb>洒落る</keb><ke_inf>&rK;</ke_inf></k_ele><r_ele><reb>しゃれ</reb></r_ele></entry>
+      |</JMdict>
+      |""".stripMargin
+    Using.resource(java.util.zip.GZIPOutputStream(Files.newOutputStream(file)))(_.write(xml.getBytes("UTF-8")))
+    file
+
+  test("JMdict loader keeps kanji headwords, priority and ke_inf codes without expanding entities") {
+    val directory = Files.createTempDirectory("vocab-jmdict-")
+    try
+      val lexicon = me.nsmr.vocabsurgery.lexicon.JMdictLoader.load(jmdict(directory, "2026-10-06"))
+      assertEquals(lexicon.created, "2026-10-06")
+      assertEquals(lexicon.headwords.map(h => (h.text, h.priority, h.info)), Vector(("痒み", true, Set.empty[String]), ("洒落", false, Set.empty[String]), ("洒落る", false, Set("rK"))))
+      val usage = lexicon.usage(CodePoint(0x6d12))
+      assertEquals((usage.headwords, usage.standard, usage.priority), (2, 1, 0))
+      assertEquals(lexicon.usage(CodePoint(0x4e48)).headwords, 0)
+    finally Using.resource(Files.walk(directory))(_.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.foreach(Files.delete))
+  }
+
+  test("reference fetch stages, checks digests, keeps versions apart and never replaces a fetched version") {
     ProcessingFixtures.withModel { (directory, _, output) =>
-      val zip = directory.resolve("Unihan.zip")
-      Using.resource(java.util.zip.ZipOutputStream(Files.newOutputStream(zip))) { out =>
-        out.putNextEntry(java.util.zip.ZipEntry("Unihan_Variants.txt"))
-        out.write(Files.readAllBytes(unihanFile(Files.createDirectory(directory.resolve("src")))))
-        out.closeEntry()
-      }
+      val zip = zipped(directory, "Unihan_Variants.txt", Files.readAllBytes(unihanFile(Files.createDirectory(directory.resolve("src")))))
       val hash = FileIO.sha256(zip)
       var opened = 0
-      val open: UnihanFetch.Opener = _ => { opened += 1; Files.newInputStream(zip) }
+      val unihan: ReferenceFetch.Opener = _ => { opened += 1; Files.newInputStream(zip) }
       val options = ProcessingOptions(outputRoot = output)
-      intercept[DataException](UnihanFetch.fetch("17.0.0", Some("0" * 64), options, open))
-      assert(!Files.exists(UnihanFetch.directory(output, "17.0.0")))
-      val result = UnihanFetch.fetch("17.0.0", Some(hash), options, open)
-      assertEquals(result.hcursor.get[Boolean]("verified"), Right(true))
-      val fetched = UnihanFetch.directory(output, "17.0.0")
+      intercept[DataException](ReferenceFetch.fetch(UnihanSource, Some("17.0.0"), Some("0" * 64), options, unihan))
+      assert(!Files.exists(ReferenceFetch.directory(output, UnihanSource, "17.0.0")))
+      assertEquals(ReferenceFetch.fetch(UnihanSource, None, Some(hash), options, unihan).hcursor.get[Boolean]("verified"), Right(true))
+      val fetched = ReferenceFetch.directory(output, UnihanSource, "17.0.0")
       assertEquals(InputInventory.files(fetched).map(_.getFileName.toString), Vector("Unihan_Variants.txt", "source.json"))
-      assertEquals(UnihanFetch.fetch("17.0.0", None, options, open).hcursor.get[Boolean]("alreadyPresent"), Right(true))
+      assertEquals(ReferenceFetch.fetch(UnihanSource, None, None, options, unihan).hcursor.get[Boolean]("alreadyPresent"), Right(true))
       assertEquals(opened, 2)
-      intercept[DataException](UnihanFetch.fetch("18.0.0", Some(hash), options, open))
-      assert(!Files.exists(UnihanFetch.directory(output, "18.0.0")))
+      intercept[DataException](ReferenceFetch.fetch(UnihanSource, Some("18.0.0"), Some(hash), options, unihan))
+      assert(!Files.exists(ReferenceFetch.directory(output, UnihanSource, "18.0.0")))
+      val builds = Vector("2026-10-05", "2026-10-06").map(date => date -> jmdict(directory, date)).toMap
+      def jm(date: String): ReferenceFetch.Opener = _ => Files.newInputStream(builds(date))
+      val first = ReferenceFetch.fetch(JMdictSource, None, None, options, jm("2026-10-06"))
+      assertEquals((first.hcursor.get[String]("version"), first.hcursor.get[Boolean]("verified")), (Right("2026-10-06"), Right(false)))
+      ReferenceFetch.fetch(JMdictSource, None, None, options, jm("2026-10-05"))
+      assertEquals(ReferenceFetch.fetch(JMdictSource, None, None, options, jm("2026-10-06")).hcursor.get[Boolean]("alreadyPresent"), Right(true))
+      assertEquals(ReferenceFetch.latest(output, JMdictSource), Some(ReferenceFetch.directory(output, JMdictSource, "2026-10-06")))
+      intercept[DataException](ReferenceFetch.fetch(JMdictSource, Some("2026-10-07"), None, options, jm("2026-10-05")))
+      Using.resource(Files.list(output.resolve(".staging")))(stages => assertEquals(stages.count(), 0L))
+    }
+  }
+
+  test("Han profile states list membership, Unihan variants and JMdict usage without deciding") {
+    ProcessingFixtures.withModel { (directory, input, output) =>
+      val unihan = Files.createDirectory(directory.resolve("unihan"))
+      unihanFile(unihan)
+      val jm = Files.createDirectory(directory.resolve("jmdict"))
+      Files.move(jmdict(directory, "2026-10-06"), jm.resolve("JMdict_e.gz"))
+      val (references, inputs) = HanProfile.load(HanReferencePaths(unihan = Some(unihan), jmdict = Some(jm)), output)
+      val judge = references.judge
+      val fa = judge(CodePoint(0x53d1))
+      assert(fa.simplifiedForm && !fa.traditionalForm && !fa.dailyJapanese && !fa.inJapaneseReference)
+      val hatsu = judge(CodePoint(0x767c))
+      assert(hatsu.traditionalForm && hatsu.simplifiedVariants == Set(CodePoint(0x53d1)))
+      val koku = judge(CodePoint(0x56fd))
+      assert(koku.joyo && koku.simplifiedForm && koku.dailyJapanese)
+      assertEquals(judge(CodePoint(0x75d2)).lexicon.priority, 1)
+      assertEquals(inputs.hcursor.downField("jmdict").get[String]("created"), Right("2026-10-06"))
+      val summary = HanProfile.write(HanProfile.fromText("痒い国の發"), false, references, inputs, output.resolve("runs/profile"), Vector.empty,
+        ProcessingOptions(outputRoot = output))
+      assertEquals(summary.hcursor.get[Int]("characters"), Right(3))
+      val lines = Files.readAllLines(output.resolve("runs/profile/han-profile.jsonl")).asScala.toVector
+      assert(lines.head.contains("\"glyph\":\"痒\"") && lines.head.contains("\"priority\":1"))
+      intercept[DataException](HanProfile.load(HanReferencePaths(unihan = Some(unihan)), output.resolve("empty")))
     }
   }
 

@@ -12,7 +12,7 @@ import me.nsmr.vocabsurgery.unicode.*
   * `deletedTokens` names an optional deletion list (see `DeletionList`).
   * `pruneSimplifiedForms` / `pruneTraditionalForms` forbid Han characters that Unihan gives a different traditional /
   * simplified variant, except the 常用 and 人名用 characters (`子の名に使える漢字`). They read `Unihan_Variants.txt` from
-  * `unihan`, by default the `fetch-unihan` directory for ICU's Unicode version, and require that version.
+  * `unihan`, by default the `fetch-reference unihan` directory for ICU's Unicode version, and require that version.
   */
 final case class CharacterPolicySettings(
     japaneseReference: Path = Path.of("kanji-data"),
@@ -30,7 +30,7 @@ final case class CharacterPolicySettings(
 ) extends PolicySettings:
   def kind: PolicyKind = CharacterPolicySettings
   private def usesUnihan: Boolean = pruneSimplifiedForms || pruneTraditionalForms
-  private def unihanDirectory: Path = unihan.getOrElse(UnihanFetch.directory(Path.of("outputs"), UnicodeData.unicodeVersion))
+  private def unihanDirectory: Path = unihan.getOrElse(ReferenceFetch.directory(Path.of("outputs"), UnihanSource, UnicodeData.unicodeVersion))
   def inputs: Vector[Path] = (japaneseReference +: deletedTokens.toVector) ++ Option.when(usesUnihan)(unihanDirectory)
   def resolved: CharacterPolicySettings = copy(japaneseReference = japaneseReference.toRealPath(), deletedTokens = deletedTokens.map(_.toRealPath()),
     unihan = if usesUnihan then Some(CharacterPolicySettings.existing(unihanDirectory).toRealPath()) else unihan)
@@ -100,7 +100,7 @@ object CharacterPolicySettings extends PolicyKind:
 
   /** A missing reference directory names the command that creates it. */
   private def existing(directory: Path): Path =
-    Diagnostics.check(java.nio.file.Files.isDirectory(directory), directory, "unihan", "missing; run scripts/vocab-surgery fetch-unihan")
+    Diagnostics.check(java.nio.file.Files.isDirectory(directory), directory, "unihan", "missing; run scripts/vocab-surgery fetch-reference unihan")
     directory
 
   private final case class Loaded(policy: CharacterPolicy, data: KanjiData, revision: Option[String], deletedTokensSha256: Option[String],
