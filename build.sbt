@@ -9,7 +9,9 @@ lazy val root = project.in(file(".")).settings(
     "io.circe" %% "circe-core" % "0.14.16",
     "io.circe" %% "circe-jawn" % "0.14.16",
     "org.apache.commons" % "commons-csv" % "1.14.1",
-    "org.scalameta" %% "munit" % "1.0.4" % Test
+    "com.ibm.icu" % "icu4j" % "78.3",
+    "org.scalameta" %% "munit" % "1.0.4" % Test,
+    "org.scalameta" %% "munit-scalacheck" % "1.0.0" % Test
   ),
   Test / fork := true,
   Test / javaOptions += "-Xmx512m"

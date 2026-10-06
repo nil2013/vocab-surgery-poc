@@ -11,7 +11,7 @@
 | `kanji` | `KanjiData`、各 source の case classes、`KanjiLoader` | 合意した 6 種類の漢字データを元字体のまま読み込む |
 | `model` | `ModelConfig`、`TokenizerData`、`ShardIndex`、`SafetensorsFile`、`ModelSnapshot` と loaders | surgery に必要な metadata と file ranges を読み込み、参照を検査 |
 
-`CompactTokenId` と decoded `TokenSurface` は、projection と surface 復元を実装する第二工程で導入する。lexical vocab の `encoded` は ByteLevel の表現であり、decoded surface として使用しない。
+第二工程で `CompactTokenId` と decoded `TokenSurface` を追加した。`CodePoint.sequence` は補助平面を含む scalar 列を返し、unpaired surrogate を拒否する。lexical vocab の `encoded` は ByteLevel の表現であり、decoded surface として使用しない。
 
 ## 共通 I/O
 

@@ -15,6 +15,16 @@ object CodePoint:
       if cp >= 0xd800 && cp <= 0xdfff then Left("surrogate is not a Unicode scalar value")
       else Right(apply(cp))
 
+  /** Split well-formed UTF-16 into scalars, including supplementary-plane characters. */
+  def sequence(value: String): Vector[CodePoint] =
+    val result = Vector.newBuilder[CodePoint]
+    val iterator = value.codePoints().iterator()
+    while iterator.hasNext do
+      val cp = iterator.nextInt()
+      DomainChecks.check(!(cp >= 0xd800 && cp <= 0xdfff), "invalid-scalar", "text", "unpaired UTF-16 surrogate")
+      result += apply(cp)
+    result.result()
+
   extension (value: CodePoint)
     def intValue: Int = value
     def text: String = new String(Character.toChars(value))
@@ -27,6 +37,24 @@ object OriginalTokenId:
     require(value >= 0, "token ID must be nonnegative")
     value
   extension (value: OriginalTokenId) def intValue: Int = value
+
+/** An ID in the contiguous vocabulary after projection, distinct from a source row. */
+opaque type CompactTokenId = Int
+object CompactTokenId:
+  def apply(value: Int): CompactTokenId =
+    require(value >= 0, "compact token ID must be nonnegative")
+    value
+  extension (value: CompactTokenId) def intValue: Int = value
+
+/** A well-formed decoded Unicode surface, never a ByteLevel vocabulary key. */
+opaque type TokenSurface = String
+object TokenSurface:
+  def apply(value: String): TokenSurface =
+    CodePoint.sequence(value)
+    value
+  extension (value: TokenSurface)
+    def text: String = value
+    def codePoints: Vector[CodePoint] = CodePoint.sequence(value)
 
 /** An absolute or relative byte offset; its origin is documented by its owner. */
 opaque type ByteOffset = Long

@@ -67,7 +67,7 @@ ByteLevel BPE の基礎 alphabet は 256 byte values である。全 byte tokens
 
 ### 初期の forbidden predicate
 
-Unicode scalar value ごとに、固定した Unicode データ版の `Script` が `Arabic`、`Cyrillic`、`Hangul` のいずれかであるか、または日本語保護集合にない Han 漢字であるか判定する。初期案は Unicode 17.0.0 の `Scripts.txt` と `UnicodeData.txt` を使用し、ファイルと SHA-256 を実行記録に残す。JVM ごとの Unicode 対応差に判定結果を依存させない。
+Unicode scalar value ごとに、固定した Unicode データ版の `Script` が `Arabic`、`Cyrillic`、`Hangul` のいずれかであるか、または日本語保護集合にない Han 漢字であるか判定する。実装では ICU4J 78.3 に同梱された Unicode 17.0.0 の Script・General_Category・NFC データを使用し、起動時に Unicode 版を検査する。provider、library version、Unicode version を provenance に保持する。外部の `Scripts.txt`／`UnicodeData.txt` を読み込んだり、それらの SHA-256 を記録したと扱ったりしない。JVM ごとの Unicode 対応差に判定結果を依存させない。[ICU 78.3](https://github.com/unicode-org/icu/releases/tag/release-78.3)
 
 surface に対象 code point が一つでも含まれる非保護 token を直接削除対象とする。日本語・英語との混在 token も同じ判定を行い、影響を分析レポートに記録する。
 
