@@ -97,14 +97,15 @@ class ProcessingSuite extends munit.FunSuite:
     val file = directory.resolve("Unihan_Variants.txt")
     // 日 has no variant; 发 is a simplified form of 發; 發 a traditional form; 国 (常用) has the traditional variant 國.
     Files.writeString(file, s"# Unihan_Variants.txt\n# Unicode Version $version\n#\nU+56FD\tkTraditionalVariant\tU+570B\n" +
-      "U+53D1\tkTraditionalVariant\tU+50AA U+767C\nU+767C\tkSimplifiedVariant\tU+53D1\nU+767C\tkSemanticVariant\tU+50AA<kMatthews\n")
+      "U+53D1\tkTraditionalVariant\tU+50AA U+767C\nU+767C\tkSimplifiedVariant\tU+53D1\nU+767C\tkSemanticVariant\tU+50AA<kMatthews\n" +
+      "U+75D2\tkTraditionalVariant\tU+7662\n")
     file
 
   test("Unihan loader keeps simplified and traditional variants and reads the Unicode version") {
     val directory = Files.createTempDirectory("vocab-unihan-")
     try
       val variants = me.nsmr.vocabsurgery.unicode.UnihanLoader.load(unihanFile(directory))
-      assertEquals(variants.simplifiedForms, Set(CodePoint(0x53d1), CodePoint(0x56fd)))
+      assertEquals(variants.simplifiedForms, Set(CodePoint(0x53d1), CodePoint(0x56fd), CodePoint(0x75d2)))
       assertEquals(variants.traditionalForms, Set(CodePoint(0x767c)))
       Files.writeString(directory.resolve("Unihan_Variants.txt"), "U+53D1\tkTraditionalVariant\tU+767C\n")
       intercept[DataException](me.nsmr.vocabsurgery.unicode.UnihanLoader.load(directory.resolve("Unihan_Variants.txt")))
@@ -202,23 +203,34 @@ class ProcessingSuite extends munit.FunSuite:
     }
   }
 
-  test("variant-form switches forbid Unihan forms outside daily Japanese and need Unihan of ICU's version") {
+  test("hanForms prunes judged forms, keeping daily Japanese, manual keeps and JMdict use as configured") {
     ProcessingFixtures.withModel { (directory, input, output) =>
       val unihan = Files.createDirectory(directory.resolve("unihan"))
       unihanFile(unihan)
-      val settings = CharacterPolicySettings(pruneSimplifiedForms = true, pruneTraditionalForms = true, unihan = Some(unihan))
-      assertEquals(PolicyFile.parse(PolicyFile(settings).json, Path.of("p.json")), PolicyFile(settings))
-      val policy = PolicyFile(settings).resolved.settings.load().policy.asInstanceOf[me.nsmr.vocabsurgery.tokenizer.CharacterPolicy]
-      assertEquals(policy.simplifiedForms, Set(CodePoint(0x53d1)))
-      assertEquals(policy.traditionalForms, Set(CodePoint(0x767c)))
-      assertEquals(policy.forbidden(CodePoint(0x53d1)).map(_.reasons.map(_.code)), Some(Set("han_simplified_form", "han_outside_japanese_reference")))
-      assertEquals(policy.forbidden(CodePoint(0x56fd)), None)
-      val path = CheckpointProcessor.plan(input, PolicyFile(settings), output.resolve("runs/variants"), ProcessingOptions(outputRoot = output))
-      assert(Files.readString(path.getParent.resolve("han-variant-forms.jsonl")).contains("\"form\":\"traditional\""))
+      val jm = Files.createDirectory(directory.resolve("jmdict"))
+      Files.move(jmdict(directory, "2026-10-06"), jm.resolve("JMdict_e.gz"))
+      import me.nsmr.vocabsurgery.kanji.*
+      def settings(rule: HanFormRule) = CharacterPolicySettings(hanForms = Some(HanFormSettings(rule, Some(unihan), Some(jm))))
+      def loaded(rule: HanFormRule) = PolicyFile(settings(rule)).resolved.settings.load().policy.asInstanceOf[me.nsmr.vocabsurgery.tokenizer.CharacterPolicy]
+      val both = HanFormRule(Set(HanForm.Simplified, HanForm.Traditional))
+      val (fa, hatsu, kayui) = (CodePoint(0x53d1), CodePoint(0x767c), CodePoint(0x75d2))
+      val conservative = loaded(both)
+      assertEquals((conservative.simplifiedForms, conservative.traditionalForms), (Set(fa), Set(hatsu)))
+      assertEquals(conservative.forbidden(fa).map(_.reasons.map(_.code)), Some(Set("han_simplified_form", "han_outside_japanese_reference")))
+      assertEquals(conservative.forbidden(CodePoint(0x56fd)), None)
+      assertEquals(loaded(both.copy(keepInJMdict = JMdictProtection.NoProtection)).simplifiedForms, Set(fa, kayui))
+      assertEquals(loaded(both.copy(keepInJMdict = JMdictProtection.PriorityHeadword)).simplifiedForms, Set(fa))
+      assertEquals(loaded(both.copy(keepInJMdict = JMdictProtection.NoProtection, keep = Set(kayui))).simplifiedForms, Set(fa))
+      assertEquals(loaded(HanFormRule(Set(HanForm.Traditional))).simplifiedForms, Set.empty[CodePoint])
+      val file = PolicyFile(settings(both.copy(keep = Set(kayui))))
+      assertEquals(PolicyFile.parse(file.json, Path.of("p.json")), file)
+      intercept[DataException](PolicyFile.parse(file.json.mapObject(f => f.add("hanForms", f("hanForms").get.mapObject(_.add("prune", Json.arr())))), Path.of("p.json")))
+      val path = CheckpointProcessor.plan(input, file, output.resolve("runs/hanforms"), ProcessingOptions(outputRoot = output))
+      assert(Files.isRegularFile(path.getParent.resolve("han-forms.jsonl")))
+      assertEquals(JsonIO.read(path).hcursor.downField("policyInputs").downField("hanForms").downField("jmdict").get[String]("created"), Right("2026-10-06"))
       unihanFile(Files.createDirectory(directory.resolve("other")), "18.0.0")
-      intercept[DataException](PolicyFile(settings.copy(unihan = Some(directory.resolve("other")))).resolved.settings.load())
-      intercept[DataException](PolicyFile(settings.copy(unihan = Some(directory.resolve("absent")))).resolved)
-      assertEquals(PolicyFile(CharacterPolicySettings(unihan = Some(directory.resolve("absent")))).resolved.settings.inputs.size, 1)
+      intercept[DataException](PolicyFile(CharacterPolicySettings(hanForms = Some(HanFormSettings(both, Some(directory.resolve("other")), Some(jm))))).resolved.settings.load())
+      intercept[DataException](PolicyFile(CharacterPolicySettings(hanForms = Some(HanFormSettings(both, Some(directory.resolve("absent")), Some(jm))))).resolved)
     }
   }
 
