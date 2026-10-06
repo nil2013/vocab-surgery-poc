@@ -94,6 +94,8 @@ helper はケースと hash、submodule revision、server・package情報、全�
 
 ローカルの tokenization 検査では、履歴の tool arguments の JSON strings を object にしたコピーを template に渡す。oMLX 側も request を template に渡す前にこの変換を行う。元ケースと API に送る履歴は変更しない。
 
+この tokenization は HF 参照 template の解析であり、oMLX の追加の前処理によって native usage の入力数と異なる場合がある。実際の入力数・速度には各応答の native usage を使い、参照解析で一致した IDs を API が返した raw IDs として扱わない。
+
 `test-data` の leak は JIS X 0213 / Python Unicode と文脈内文字の除外による指標であり、surgery の ICU policy predicate とは別である。replay は `stop` かつ text がある応答だけを concluded として言語・混入を集計し、`tool_calls` / `length` を別に数える。合成の PASS は指定の文字一致・keywords・code harness 等の判定で、日本語品質の人による評価を代替しない。失敗時は部分 JSONL を保持して停止し、新しい出力先で再実行する。
 
 モデル切替直後に oMLX の dynamic memory ceiling が旧状況を参照して HTTP 507 を返す場合、明示 load を最大20秒、1秒間隔で再試行する。他の HTTP errors は再試行せず、memory guard の上限は変更しない。完了した baseline の後に失敗した場合は、新しい出力先で `--baseline-results <旧 comparison directory>` を指定できる。モデル・manifest hash・データ revision / hashes・server 情報・package versions・samples / trials / warmups が一致し、全 baseline 行の case / seed / group が揃っている場合だけコピーして再利用し、そのファイル hash と出所を記録する。部分 baseline は再利用しない。
@@ -105,3 +107,5 @@ helper はケースと hash、submodule revision、server・package情報、全�
 専用 oMLX 0.7.0rc1 で 7 件の小 suite を before／after 実行し、日本語 multi-turn、Python／Scala／TypeScript 各 1、FIM 1、tool-call 1 と EOS／streaming の動作を確認した。別の短入力 2 件で warm-up 1＋測定 5 回、同一 ID 列 4 件でも測定した。これらは helper の動作確認であり、固定 100 件の品質評価と日本語目視評価は未実施。
 
 logits は 4 件中 3 件が完全一致。入力 `a` の 128,803 要素中 1 要素で誤差 .015625、許容値 .012390625 となり gate は不合格。source 反復は一致し、surviving argmax は 4 件とも一致した。原因は未確定で、閾値を広げて合格扱いにしていない。TASK の全目的達成は未確認である。
+
+同日、最新 v2 加工モデルで全静的検証、固定4入力の logits、`test-data` 全26合成・35 replay ケース、速度の正順 / 逆順比較を追加実施した。[測定結果と限界](EVALUATION_TESTDATA_20261006.md)を参照。v2 の logits は合格したが、上記 v1 の不合格とは別の結果である。

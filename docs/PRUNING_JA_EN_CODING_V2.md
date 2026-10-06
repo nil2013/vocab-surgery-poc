@@ -83,4 +83,4 @@ scripts/vocab-surgery verify --manifest outputs/runs/ja-en-coding-v2-new/manifes
 
 確認結果は run 内の `verification.json`、`reverification.json`、`policy-verification.json`、`math-and-manual-han-roundtrip.json` に保存した。これらとモデルは生成 artifacts として Git 対象外。
 
-ユーザー指定により今回は **静的検証まで**。新モデルの推論、surviving logits、日本語・coding 品質、混入率、速度は未測定。v1 モデルの既知の logits 許容差超過は別の評価結果であり、新モデルの合否として流用しない。
+初回の加工・公開時はユーザー指定により **静的検証まで** とした。その後、モデル unload によるメモリ確保と追加評価の承認を受け、同日、推論・surviving logits・test-data の全ケース・速度比較を実施した。[測定結果と限界](EVALUATION_TESTDATA_20261006.md)を参照。v1 モデルの既知の logits 許容差超過は別の評価結果であり、新モデルの合否として流用しない。
