@@ -86,7 +86,12 @@ object SafetensorsIO:
     }
     val metadataEntry = if metadata.isEmpty then Vector.empty else Vector(
       "__metadata__" -> Json.obj(metadata.toVector.sortBy(_._1).map((key, value) => key -> Json.fromString(value))*))
-    val jsonBytes = Json.obj((metadataEntry ++ entries)*).noSpaces.getBytes(StandardCharsets.UTF_8)
+    encodeHeaderJson(Json.obj((metadataEntry ++ entries)*))
+
+  /** Encode a planned header without dropping unknown tensor fields or per-shard metadata. */
+  def encodeHeaderJson(header: Json): Array[Byte] =
+    require(header.isObject, "header must be an object")
+    val jsonBytes = io.circe.Printer.noSpaces.copy(sortKeys = true).print(header).getBytes(StandardCharsets.UTF_8)
     val paddedLength = Math.addExact(jsonBytes.length, (8 - jsonBytes.length % 8) % 8)
     require(paddedLength <= DefaultHeaderLimit, "encoded header exceeds header limit")
     val result = ByteBuffer.allocate(Math.addExact(8, paddedLength)).order(ByteOrder.LITTLE_ENDIAN)
