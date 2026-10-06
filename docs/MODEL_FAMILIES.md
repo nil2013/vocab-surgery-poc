@@ -66,4 +66,16 @@ tool は `a4dfe26`（policy を trait 化する前）、policy は `ja-en-coding
 
 成果物は `outputs/runs/flash-next-ja-en-coding-v2`、`outputs/models/flash-next-ja-en-coding-v2`（git 管理外）。
 
+### TensorFold でのロード検査（2026-10-07）
+
+本番の serve 環境とは別に、TensorFold `cb2ebf05` を `outputs/tensorfold` に clone し、ブランチ `vocab-surgery-ple-token-ids`（`912415a`）で `ple-token-ids.json` を読む改造を加えた。改造は 4 ファイルで、PLE の hash に元の語彙数と元の ID（履歴と PLE EOS も元の ID）を使い、組み込みの draft 語彙リストを加工済み checkpoint では拒否する。専用の venv と CUDA 拡張の build directory を clone 内に置いた。検査 script と結果は `outputs/runs/flash-next-ja-en-coding-v2/tensorfold-load/`。
+
+| 検査 | 結果 |
+| --- | --- |
+| 加工済み checkpoint のロード | 成功。hash 係数の照合（`NGram.check`）が元の語彙数 248,320 で通過し、PLE EOS は 248,044 |
+| greedy 生成（日本語 2、英語・Python 2 の指示、各最大 96 token、MTP なし） | 4 件とも、加工後の出力 token を PLE 対応表で元の ID に戻すと元の checkpoint の出力と完全一致 |
+| MTP（draft 最大 3、`translate-ids` で変換した 78,837 件の draft 語彙リスト） | ロード成功。4 件とも MTP なしの出力と完全一致 |
+
+1 GPU、`--ple-on-ssd` 相当、4,096 token の window での検査であり、長文・sampling・複数 request・prefix cache の再開は検査していない。
+
 `FileTransfer` の Linux clone（`FICLONE`）は reflink 非対応の ext4 でのみ実行し、clone できない場合にコピーへ戻ることを確認した。reflink 対応ファイルシステム（XFS、Btrfs）での clone 成功は未検証。
