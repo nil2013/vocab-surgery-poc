@@ -5,6 +5,7 @@ import org.scalacheck.{Gen, Prop}
 import me.nsmr.vocabsurgery.core.*
 import me.nsmr.vocabsurgery.kanji.JapaneseKanjiReference
 import me.nsmr.vocabsurgery.model.*
+import me.nsmr.vocabsurgery.unicode.*
 
 class VocabularySuite extends munit.ScalaCheckSuite:
   private val japanese = JapaneseKanjiReference.fromCharacters(CodePoint.sequence("日本").toSet)
@@ -49,6 +50,33 @@ class VocabularySuite extends munit.ScalaCheckSuite:
     val literalSurface = VocabularyOperations.analyze(tokenizer, TokenizerFixtures.rows(tokenizer), policy.copy(protectedContents = Set("ع")))
     assert(literalSurface.projection.compact(TokenizerFixtures.id(tokenizer, arabic)).isDefined)
     assert(literalSurface.tokens.find(_.content == arabic).get.protection(ProtectionReason.Explicit))
+  }
+
+  test("Math protection overrides scalar bans, protects mathematical rows and still prunes mixed forbidden text") {
+    val aleph = CodePoint(0x2135)
+    val arabicMath = CodePoint(0x1ee00)
+    assert(UnicodeData.isMath(aleph))
+    assert(UnicodeData.isMath(arabicMath))
+    assert(!UnicodeData.isMath(CodePoint(0x05d0)))
+    assert(!UnicodeData.isMath(CodePoint(0x03bb)))
+    val math = ByteLevel.encode(TokenSurface("ℵ"))
+    val mixed = ByteLevel.encode(TokenSurface("个ℵ"))
+    val tokenizer = TokenizerFixtures.create(Vector(math, mixed))
+    val settings = policy.copy(explicitForbidden = Set(aleph, CodePoint(0x4e2a)))
+    assert(settings.forbidden(aleph).isEmpty)
+    assert(settings.forbidden(arabicMath).isEmpty)
+    assertEquals(settings.forbidden(TokenSurface("个ℵ")).map(_.character), Vector(CodePoint(0x4e2a)))
+    val result = VocabularyOperations.analyze(tokenizer, TokenizerFixtures.rows(tokenizer), settings)
+    val mathematical = result.tokens.find(_.content == math).get
+    assert(mathematical.protection(ProtectionReason.Math))
+    assert(result.projection.compact(mathematical.id).isDefined)
+    assert(result.cleanup.directDeleted(TokenizerFixtures.id(tokenizer, mixed)))
+    val disabled = settings.copy(protectMath = false)
+    assert(disabled.forbidden(aleph).nonEmpty)
+    assert(disabled.forbidden(arabicMath).nonEmpty)
+    val pruned = VocabularyOperations.analyze(tokenizer, TokenizerFixtures.rows(tokenizer), disabled)
+    assert(pruned.cleanup.directDeleted(mathematical.id))
+    assert(!pruned.tokens.find(_.content == math).get.protection(ProtectionReason.Math))
   }
 
   test("analysis diagnoses missing protocol, byte alphabet, unknown protection and inconsistent token identities") {

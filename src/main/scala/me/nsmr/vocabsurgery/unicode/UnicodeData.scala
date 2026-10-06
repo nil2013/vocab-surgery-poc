@@ -1,6 +1,6 @@
 package me.nsmr.vocabsurgery.unicode
 
-import com.ibm.icu.lang.{UCharacter, UCharacterEnums, UScript}
+import com.ibm.icu.lang.{UCharacter, UCharacterEnums, UProperty, UScript}
 import com.ibm.icu.text.Normalizer2
 import com.ibm.icu.util.VersionInfo
 import me.nsmr.vocabsurgery.core.*
@@ -29,6 +29,8 @@ object UnicodeData:
   private val nfc = Normalizer2.getNFCInstance()
 
   def script(codePoint: CodePoint): UnicodeScript = UnicodeScript.fromCode(UScript.getScript(codePoint.intValue))
+  /** Unicode Math binary property; this does not include every character used in mathematical notation. */
+  def isMath(codePoint: CodePoint): Boolean = UCharacter.hasBinaryProperty(codePoint.intValue, UProperty.MATH)
   def isHanKanji(codePoint: CodePoint): Boolean =
     script(codePoint) == UnicodeScript.Han && UCharacter.getType(codePoint.intValue) == UCharacterEnums.ECharacterCategory.OTHER_LETTER
   def normalize(surface: TokenSurface): TokenSurface = TokenSurface(nfc.normalize(surface.text))

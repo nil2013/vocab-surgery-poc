@@ -17,13 +17,50 @@ class ProcessingSuite extends munit.FunSuite:
     val path = Path.of("synthetic-policy.json")
     val settings = PolicySettings()
     assertEquals(PolicySettings.parse(settings.json, path), settings)
-    Vector(Json.obj("oops" -> Json.True), Json.obj("formatVersion" -> Json.fromInt(2)),
+    Vector(Json.obj("oops" -> Json.True), Json.obj("formatVersion" -> Json.fromInt(3)),
       Json.obj("unicodeVersion" -> Json.fromString("16.0.0")), Json.obj("japaneseExtra" -> Json.arr(Json.fromInt(0xd800))),
       Json.obj("explicitForbidden" -> Json.arr(Json.fromInt(-1))), Json.obj("protectedIds" -> Json.arr(Json.fromInt(-1))),
       Json.obj("forbiddenScripts" -> Json.arr(Json.fromString("nonsense"))), Json.obj("unregisteredRows" -> Json.fromString("keep")),
-      Json.obj("parameterCount" -> Json.fromString("infer")), Json.obj("pruneHanOutsideReference" -> Json.Null))
+      Json.obj("parameterCount" -> Json.fromString("infer")), Json.obj("pruneHanOutsideReference" -> Json.Null),
+      Json.obj("protectMath" -> Json.Null), Json.obj("protectMath" -> Json.fromString("true")),
+      Json.obj("formatVersion" -> Json.fromInt(1), "protectMath" -> Json.True))
       .foreach(json => intercept[DataException](PolicySettings.parse(json, path)))
     intercept[DataException](PolicySettings.load(Path.of("nonexistent-policy.json")))
+  }
+
+  test("policy v2 selects Math protection while v1 retains its exact representation and behavior") {
+    val path = Path.of("policy.json")
+    assert(PolicySettings.parse(Json.obj(), path).protectMath)
+    val disabled = PolicySettings(protectMath = false)
+    assertEquals(PolicySettings.parse(disabled.json, path), disabled)
+    val legacy = PolicySettings(protectMath = false, formatVersion = 1)
+    assertEquals(PolicySettings.parse(legacy.json, path), legacy)
+    assert(!legacy.json.hcursor.downField("protectMath").succeeded)
+    val reference = me.nsmr.vocabsurgery.kanji.JapaneseKanjiReference.fromCharacters(Set(CodePoint(0x65e5)))
+    assert(PolicySettings().domain(reference).protectMath)
+    assert(!legacy.domain(reference).protectMath)
+    intercept[IllegalArgumentException](PolicySettings(formatVersion = 1))
+  }
+
+  test("recorded v1 plans and manifests remain valid without adopting new policy defaults") {
+    ProcessingFixtures.withModel { (_, input, output) =>
+      val options = ProcessingOptions(outputRoot = output, cloner = FileCloner.disabled)
+      val settings = PolicySettings(protectMath = false, formatVersion = 1)
+      val path = CheckpointProcessor.plan(input, kanji, settings, output.resolve("runs/legacy"), options)
+      assertEquals(PlanStore.loadVerified(path).settings.json, settings.json)
+      CheckpointProcessor.applyPlan(path, output.resolve("models/legacy"), ProcessingFixtures.reference, options)
+      assert(CheckpointProcessor.verifyManifest(path.getParent.resolve("manifest.json"), ProcessingFixtures.reference, options).reference.hcursor.get[Boolean]("passed").contains(true))
+    }
+  }
+
+  test("coding profile preserves Greek and Canadian Aboriginal and explicitly targets the five reviewed Han characters") {
+    val settings = PolicySettings.load(Path.of("policies/ja-en-coding-v2.json"))
+    assert(settings.protectMath)
+    assertEquals(settings.explicitForbidden, CodePoint.sequence("个开关无网").toSet)
+    assert(settings.forbiddenScripts(me.nsmr.vocabsurgery.unicode.UnicodeScript.fromName("Hebrew")))
+    assert(settings.forbiddenScripts(me.nsmr.vocabsurgery.unicode.UnicodeScript.fromName("Thai")))
+    Vector("Greek", "Canadian_Aboriginal", "Latin", "Han", "Hiragana", "Katakana", "Common", "Inherited")
+      .foreach(name => assert(!settings.forbiddenScripts(me.nsmr.vocabsurgery.unicode.UnicodeScript.fromName(name))))
   }
 
   test("saved plan creates analysis artifacts and verifies input identity and deterministic operations") {

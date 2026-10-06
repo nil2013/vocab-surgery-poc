@@ -37,7 +37,8 @@ class LocalSnapshotSuite extends munit.FunSuite:
     assertEquals(tool.special, false)
     println(s"Inspected ${snapshot.shards.size} shards / ${snapshot.shards.map(_.tensors.size).sum} tensors without loading payloads")
     val japanese = JapaneseKanjiReference.from(KanjiLoader.load(Path.of("kanji-data")))
-    val plan = ModelOperations.plan(snapshot, PruningPolicy(japanese))
+    // Preserve the recorded v1 baseline; current Math-protected policies have independent plans.
+    val plan = ModelOperations.plan(snapshot, PruningPolicy(japanese, protectMath = false))
     assertEquals(plan.analysis.unregisteredIds.size, 267)
     assertEquals(plan.analysis.tokens.count(_.protection(ProtectionReason.BaseByte)), 256)
     assertEquals(plan.analysis.tokens.count(_.protection(ProtectionReason.PartialUtf8)), 1448)

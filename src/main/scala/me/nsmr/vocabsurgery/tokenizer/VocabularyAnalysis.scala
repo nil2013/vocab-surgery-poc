@@ -21,13 +21,15 @@ final case class PruningPolicy(
     pruneHanOutsideReference: Boolean = true,
     explicitForbidden: Set[CodePoint] = Set.empty,
     protectedIds: Set[OriginalTokenId] = Set.empty,
-    protectedContents: Set[String] = Set.empty
+    protectedContents: Set[String] = Set.empty,
+    protectMath: Boolean = true
 ):
   def forbidden(surface: TokenSurface): Vector[ForbiddenCharacter] =
     surface.codePoints.distinct.flatMap(forbidden)
 
   /** Reuse the exact same predicate for generated-text metrics and tokenizer classification. */
   def forbidden(cp: CodePoint): Option[ForbiddenCharacter] =
+      if protectMath && UnicodeData.isMath(cp) then return None
       val script = UnicodeData.script(cp)
       val reasons = Set.newBuilder[ForbiddenReason]
       if forbiddenScripts(script) then reasons += ForbiddenReason.Script(script)
@@ -37,7 +39,7 @@ final case class PruningPolicy(
       if result.isEmpty then None else Some(ForbiddenCharacter(cp, result))
 
 enum ProtectionReason:
-  case BaseByte, PartialUtf8, AddedToken, RequiredReference, Explicit
+  case BaseByte, PartialUtf8, AddedToken, RequiredReference, Explicit, Math
 
 final case class TokenAnalysis(
     id: OriginalTokenId,
@@ -108,6 +110,7 @@ object VocabularyOperations:
       if added.contains(id) then protectedBy += ProtectionReason.AddedToken
       if required(id) then protectedBy += ProtectionReason.RequiredReference
       if policy.protectedIds(id) || explicitIds(id) then protectedBy += ProtectionReason.Explicit
+      if policy.protectMath && surface.exists(_.codePoints.forall(UnicodeData.isMath)) then protectedBy += ProtectionReason.Math
       TokenAnalysis(id, content, decoded, surface, protectedBy.result(), surface.map(policy.forbidden).getOrElse(Vector.empty))
     }
     val direct = tokens.filter(_.directDelete).map(_.id).toSet
