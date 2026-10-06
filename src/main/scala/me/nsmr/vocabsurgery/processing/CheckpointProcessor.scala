@@ -36,7 +36,15 @@ object CheckpointProcessor:
   def plan(source: Path, kanji: Path, settings: PolicySettings, runDirectory: Path,
       options: ProcessingOptions = ProcessingOptions()): Path =
     val prepared = PlanStore.prepare(source, kanji, settings)
-    val directory = ProcessingIO.createDirectory(options.outputRoot, runDirectory, Vector(source, kanji))
+    val protectedRoots = Vector(source, kanji)
+    val target = ProcessingIO.outputPath(options.outputRoot, runDirectory, protectedRoots)
+    val directory = if Files.exists(target) then
+      val existing = InputInventory.files(target)
+      Diagnostics.check(existing.map(_.getFileName.toString) == Vector("inspection.json"), target, "plan", "only an inspection-only run can be extended")
+      val inspection = JsonIO.read(target.resolve("inspection.json"))
+      Diagnostics.check(inspection == PlanReports.inspection(prepared.source), target, "inspection", "inspection input changed or differs from plan source")
+      target
+    else ProcessingIO.createDirectory(options.outputRoot, runDirectory, protectedRoots)
     PlanReports.write(prepared, directory)
     directory.resolve("plan.json")
 

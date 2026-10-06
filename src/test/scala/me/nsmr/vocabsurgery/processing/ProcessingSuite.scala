@@ -87,6 +87,47 @@ class ProcessingSuite extends munit.FunSuite:
     }
   }
 
+  test("no-deletion processing copies the entire checkpoint byte-for-byte") {
+    ProcessingFixtures.withModel { (_, input, output) =>
+      val loaded = SnapshotLoader.load(input)
+      val rows = (loaded.tokenizer.vocabulary.map(_.id) ++ loaded.tokenizer.addedTokens.map(_.id)).distinct.size
+      var cursor = 0L
+      val tensors = loaded.shards.head.tensors.map { tensor =>
+        val shape = if tensor.name == "body" then tensor.shape else rows.toLong +: tensor.shape.tail
+        val length = shape.foldLeft(tensor.dtype.byteWidth.toLong)(Math.multiplyExact)
+        val result = tensor.copy(shape = shape, dataRange = ByteRange(ByteOffset(cursor), ByteCount(length)))
+        cursor += length
+        result
+      }
+      val header = tensors.foldLeft(loaded.shards.head.originalHeader.asObject.get) { (fields, tensor) =>
+        fields.add(tensor.name, fields(tensor.name).get.mapObject(_.add("shape", Json.fromValues(tensor.shape.map(Json.fromLong)))
+          .add("data_offsets", Json.arr(Json.fromLong(tensor.dataRange.start.longValue), Json.fromLong(tensor.dataRange.endExclusive.longValue)))))
+      }
+      Files.write(input.resolve("input.safetensors"), SafetensorsIO.encodeHeaderJson(Json.fromJsonObject(header)) ++ (0 until cursor.toInt).map(_.toByte).toArray)
+      Files.writeString(input.resolve("config.json"), loaded.config.original.mapObject(_.add("vocab_size", Json.fromInt(rows))).noSpaces)
+      Files.writeString(input.resolve("model.safetensors.index.json"), loaded.index.original.mapObject(fields => fields.add("metadata", fields("metadata").get.mapObject(_.add("total_size", Json.fromLong(cursor))))).noSpaces)
+      val settings = PolicySettings(forbiddenScripts = Set.empty, pruneHanOutsideReference = false)
+      val options = ProcessingOptions(outputRoot = output, cloner = FileCloner.disabled)
+      val plan = CheckpointProcessor.plan(input, kanji, settings, output.resolve("runs/noop"), options)
+      assertEquals(PlanStore.loadVerified(plan).domain.removedRows, 0)
+      val result = CheckpointProcessor.applyPlan(plan, output.resolve("models/noop"), ProcessingFixtures.reference, options)
+      assertEquals(FileIO.sha256(result.resolve("input.safetensors")), FileIO.sha256(input.resolve("input.safetensors")))
+    }
+  }
+
+  test("changed kanji source hashes prevent application even when the glyph set is unchanged") {
+    ProcessingFixtures.withModel { (directory, input, output) =>
+      val reference = Files.createDirectory(directory.resolve("kanji"))
+      Vector("JIS漢字.csv", "常用漢字.csv", "教育漢字.csv", "子の名に使える漢字.csv", "常用漢字表本表.json", "漢検漢字辞典漢字.csv")
+        .foreach(name => Files.copy(kanji.resolve(name), reference.resolve(name)))
+      val plan = CheckpointProcessor.plan(input, reference, PolicySettings(), output.resolve("runs/kanji"), ProcessingOptions(outputRoot = output))
+      val path = reference.resolve("常用漢字表本表.json")
+      val records = JsonIO.read(path).asArray.get
+      Files.writeString(path, Json.fromValues(records.updated(0, records.head.mapObject(_.add("fixtureChange", Json.True)))).noSpaces)
+      intercept[DataException](PlanStore.loadVerified(plan))
+    }
+  }
+
   test("output paths cannot escape, overlap inputs, follow symlinks or overwrite directories") {
     ProcessingFixtures.withModel { (directory, input, output) =>
       val options = ProcessingOptions(outputRoot = output)
