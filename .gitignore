@@ -14,3 +14,4 @@ target/
 # Local tooling and OS files
 .cache/
 .DS_Store
+__pycache__/
