@@ -1,0 +1,3 @@
+[submodule "kanji-data"]
+	path = kanji-data
+	url = git@github.com:mimneko/kanji-data.git
