@@ -11,6 +11,47 @@ def read_json(path):
         return json.load(stream)
 
 
+def tokens_by_id(tokenizer_json):
+    """Each registered ID's vocabulary key or added-token content, from a tokenizer.json document."""
+    found = {token_id: key for key, token_id in tokenizer_json["model"]["vocab"].items()}
+    found.update({token["id"]: token["content"] for token in tokenizer_json.get("added_tokens", [])})
+    return found
+
+
+def merge_lines(tokenizer_json):
+    return [merge if isinstance(merge, str) else " ".join(merge) for merge in tokenizer_json["model"]["merges"]]
+
+
+def check_files(source, model, mapping):
+    """Row identity, slow tokenizer files and PLE token IDs, read as plain JSON and text without tokenizer libraries."""
+    old_json, new_json = read_json(source / "tokenizer.json"), read_json(model / "tokenizer.json")
+    old_tokens, new_tokens = tokens_by_id(old_json), tokens_by_id(new_json)
+    assert sorted(new_tokens) == list(range(len(mapping))), "noncontiguous IDs"
+    assert all(new_tokens[compact] == old_tokens[original] for compact, original in enumerate(mapping)), "a row no longer holds its source token"
+    checked = []
+    if (model / "vocab.json").exists() or (source / "vocab.json").exists():
+        assert read_json(model / "vocab.json") == new_json["model"]["vocab"], "vocab.json differs from tokenizer.json"
+        checked.append("vocab.json")
+    if (model / "merges.txt").exists() or (source / "merges.txt").exists():
+        lines = (model / "merges.txt").read_text(encoding="utf-8").split("\n")
+        assert [line for line in lines if line and not line.startswith("#version")] == merge_lines(new_json), "merges.txt differs from tokenizer.json"
+        checked.append("merges.txt")
+    ple = None
+    if (model / "ple-token-ids.json").exists():
+        table = read_json(model / "ple-token-ids.json")
+        if (source / "ple-token-ids.json").exists():
+            earlier = read_json(source / "ple-token-ids.json")
+            expected, size = [earlier["originalTokenIds"][original] for original in mapping], earlier["originalVocabSize"]
+        else:
+            config = read_json(source / "config.json")
+            expected, size = list(mapping), config.get("text_config", config)["vocab_size"]
+        assert table["originalTokenIds"] == expected, "PLE token IDs do not follow the projection"
+        assert table["originalVocabSize"] == size, "PLE vocabulary size differs from the source"
+        ple = {"rows": len(expected), "originalVocabSize": size}
+        checked.append("ple-token-ids.json")
+    return {"rowIdentity": len(mapping), "companionFiles": checked, "pleTokenIds": ple}
+
+
 def validate(source, model, mapping, nfc):
     import tokenizers
     import transformers
@@ -65,7 +106,8 @@ def validate(source, model, mapping, nfc):
                         original = node.value.value
                         fixed.append({"file": str(script.relative_to(source)), "name": name, "id": original})
                         assert inverse.get(original) == original, ("unrewritten fixed token ID in copied parser", name, original)
-    return {"passed": True, "tokenizersVersion": tokenizers.__version__, "transformersVersion": transformers.__version__,
+    files = check_files(source, model, mapping)
+    return {"passed": True, "tokenizersVersion": tokenizers.__version__, "transformersVersion": transformers.__version__, "files": files,
             "nfcCharacters": len(nfc), "protectedAddedTokens": len(added), "samples": rows, "chatTemplates": len(chats), "fixedParserIds": fixed}
 
 
