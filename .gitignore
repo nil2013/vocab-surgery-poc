@@ -16,3 +16,6 @@ target/
 .DS_Store
 __pycache__/
 /.venv/
+
+# Personal Claude Code settings
+/.claude/settings.local.json

@@ -8,7 +8,7 @@ canonical profile は [policies/ja-en-coding-v2.json](../policies/ja-en-coding-v
 
 Greek と Canadian_Aboriginal は用途があるため Script の禁止対象から外す。Latin・Han・Hiragana・Katakana・Common・Inherited も Script 一括禁止の対象にしない。Han は参照集合と明示禁止文字で判定する。非 ASCII Latin、絵文字・罫線・矢印、Common／Inherited の Arabic 関連記号は、今回の profile の追加禁止項目には含めない。
 
-新しい policy formatVersion は 2。`protectMath` は true が既定で、false に切り替えられる。version 1 の保存済み policy は従来どおり Math 保護なしで読み書きする。JSON 表現と policy hash を維持するため、旧 plan を新しい既定値で解釈し直さない。schema と移行条件は [PROCESSING.md](PROCESSING.md) を参照。
+`protectMath` は true が既定で、false に切り替えられる。この記録の作成時（`dbab73f`）は policy に formatVersion があったが、現在は廃止しており、`policies/ja-en-coding-v2.json` からも除いた。schema は [PROCESSING.md](PROCESSING.md) を参照。
 
 ## Math 保護の意味
 

@@ -42,15 +42,15 @@ range コピーは最大 16 MiB の buffer を使用する。file positions と 
 
 ## モデル metadata
 
-`SnapshotLoader.load` は config、generation config、tokenizer、tokenizer config、shard index、chat template を読み込み、index が参照する shards の header を検査する。snapshot の symlinks は読み取り専用で追跡する。
+`SnapshotLoader.load` は config、generation config、tokenizer、tokenizer config、shard index を読み込み、index が参照する shards の header を検査する。`chat_template.jinja`、tokenizer scheme の付随ファイル（`vocab.json`／`merges.txt`）、モデル系列のファイル（Flash-Next の `ple-token-ids.json`）は存在すれば読む。snapshot の symlinks は読み取り専用で追跡する。
 
-config の typed fields は model type、vocab size、hidden size、embedding 共有、量子化設定、主要な token ID 参照である。量子化 override の省略項目は基本設定を継承し、`quantization` と `quantization_config` が併記される場合は両者を照合する。typed token ID 参照は BOS／EOS／PAD／decoder start とし、scalar と ID list の形を保持する。
+config は `ModelFamily.of` で系列を決め、系列が示す path から vocab size と hidden size を読む。量子化設定は任意で、量子化 override の省略項目は基本設定を継承し、`quantization` と `quantization_config` が併記される場合は両者を照合する。token ID 参照は系列の scope ごとに `TokenReferences` で集め、すべて登録済み ID であることを確認する。
 
 tokenizer は lexical vocabulary、merge 順序、added tokens と属性を保持する。重複 ID、added token と lexical vocab の衝突、vocab にない merge 左右・結果を拒否する。added tokens の `special=false` はそのまま保持し、保護対象の判定は第二工程に委ねる。
 
 config・generation config・tokenizer・index の元 JSON は immutable な Circe `Json` として保持する。未知の fields と数値を落とさず、後続の metadata 更新の入力に利用できる。その他の ID fields、protocol、ByteLevel alphabet の詳細検証は、第二工程以降の操作で扱う。
 
-shard index の file names は snapshot 直下の `.safetensors` に限定する。index と全 shard headers の tensor 対応、payload byte 数、登録 token IDs の範囲、主要設定からの ID 参照、embedding／LM head の companion tensors と行数を照合する。
+shard index の file names は snapshot 直下の `.safetensors` に限定する。index と全 shard headers の tensor 対応、payload byte 数、登録 token IDs の範囲、設定からの ID 参照、系列が示す語彙 module の weight の行数を照合する。companion tensors の構成は第二工程の `VocabularyModule.validate` が検査する。
 
 ## safetensors
 
@@ -66,4 +66,4 @@ header は `{` から始まる JSON とし、`__metadata__` は string map に�
 
 合成入力で CSV の quoting、不正 UTF-8、JSON の整数精度、既存出力の保持、2 GiB 超の range コピー、safetensors の不正 offsets・shape・header、snapshot 内の参照不整合を検証する。40 GiB の sparse checkpoint を 512 MiB の test heap で検査し、payload 展開を避けることを確認する。
 
-`kanji-data` の実ファイルは 6 種類を読み込む。任意のローカルモデルへアクセスする integration test は明示的な path 指定を必要とし、この workspace では固定 snapshot の 9 shards・1,891 tensors と記録された件数・byte 数を照合した。これらは payload の byte 同一性、pruning の正しさ、oMLX での推論成功を保証する検証ではない。
+`kanji-data` の実ファイルは 6 種類を読み込む。任意のローカルモデルへアクセスする integration test は明示的な path 指定を必要とする。Coder-Next の snapshot（9 shards・1,891 tensors）と Flash-Next の MLX 4bit MTP snapshot（22 shards・3,747 tensors）で実行した。これらは payload の byte 同一性、pruning の正しさ、推論成功を保証する検証ではない。
