@@ -1,3 +1,6 @@
 [submodule "kanji-data"]
 	path = kanji-data
 	url = git@github.com:mimneko/kanji-data.git
+[submodule "test-data"]
+	path = qwen3-coder-next-pruning-testdata
+	url = git@github.com:nil2013/qwen3-coder-next-pruning-testdata.git
