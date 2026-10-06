@@ -20,6 +20,10 @@ import logits
 import code_checks
 import evaluate_testdata
 import check_tokenizer
+try:
+    import greek_fragments
+except ImportError:
+    greek_fragments = None
 
 spec = importlib.util.spec_from_file_location("make_suite", SCRIPTS / "make-suite.py")
 make_suite = importlib.util.module_from_spec(spec)
@@ -257,6 +261,12 @@ class EvaluationTests(unittest.TestCase):
         process = subprocess.run([sys.executable, "-O", str(SCRIPTS / "check_tokenizer.py"), "--help"], capture_output=True, text=True)
         self.assertNotEqual(process.returncode, 0)
         self.assertIn("assertions enabled", process.stderr)
+
+    @unittest.skipIf(greek_fragments is None, "needs the regex module")
+    def test_greek_fragments_keep_single_letters_and_unaccented_pairs(self):
+        rows = [{"compactId": i, "surface": s, "protection": []} for i, s in enumerate(["α", " μ", "ου", "εί", "τικ", " προ", "abc"])]
+        rows += [{"compactId": None, "surface": "ται", "protection": []}, {"compactId": 9, "surface": "ουν", "protection": ["policy_math"]}]
+        self.assertEqual(sorted(greek_fragments.fragments(json.dumps(r) for r in rows)), [" προ", "εί", "τικ"])
 
     def test_reference_files_follow_rows_slow_tokenizer_files_and_ple_token_ids(self):
         with tempfile.TemporaryDirectory() as root:

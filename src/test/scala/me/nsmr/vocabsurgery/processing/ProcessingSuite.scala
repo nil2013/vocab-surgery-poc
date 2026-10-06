@@ -55,6 +55,44 @@ class ProcessingSuite extends munit.FunSuite:
       .foreach(name => assert(!settings.forbiddenScripts(me.nsmr.vocabsurgery.unicode.UnicodeScript.fromName(name))))
   }
 
+  test("deletion list reads JSON string lines, skips comments and blanks, and rejects duplicates or bare text") {
+    val directory = Files.createTempDirectory("vocab-deletion-list-")
+    try
+      val path = directory.resolve("list.txt")
+      Files.writeString(path, "# Greek fragments\n\n\" yang\"\n\"\\n\\n\"\n  \"什么\"  \r\n")
+      assertEquals(DeletionList.read(path), Vector(" yang", "\n\n", "什么"))
+      Vector("yang\n", "\"a\"\n\"a\"\n", "\"\"\n", "1\n").foreach { text =>
+        Files.writeString(path, text)
+        intercept[DataException](DeletionList.read(path))
+      }
+    finally Using.resource(Files.walk(directory))(_.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.foreach(Files.delete))
+  }
+
+  test("listed tokens are deleted, protected ones kept as conflicts, unmatched entries reported, and list edits invalidate the plan") {
+    ProcessingFixtures.withModel { (directory, input, output) =>
+      val list = directory.resolve("deleted.txt")
+      Files.writeString(list, "\"ab\"\n\"<tool_call>\"\n\"not-in-this-model\"\n")
+      val policy = PolicyFile(CharacterPolicySettings(deletedTokens = Some(list)))
+      assertEquals(PolicyFile.parse(policy.json, Path.of("p.json")), policy)
+      val options = ProcessingOptions(outputRoot = output)
+      val path = CheckpointProcessor.plan(input, policy, output.resolve("runs/listed"), options)
+      val prepared = PlanStore.loadVerified(path)
+      val tokens = prepared.domain.analysis.tokens
+      val ab = tokens.find(_.content == "ab").get
+      assert(prepared.domain.analysis.cleanup.directDeleted(ab.id))
+      assert(tokens.find(_.content == "<tool_call>").exists(t => t.protectedToken && t.deletion.exists(_.code == "listed")))
+      val summary = JsonIO.read(path.getParent.resolve("summary.json"))
+      val deletion = summary.hcursor.downField("policy").downField("deletionList")
+      assertEquals(deletion.get[Int]("matchedTokens"), Right(2))
+      assertEquals(deletion.get[Int]("keptByProtection"), Right(1))
+      assertEquals(deletion.get[Vector[String]]("unmatchedExamples"), Right(Vector("not-in-this-model")))
+      assertEquals(summary.hcursor.downField("rowsAboveMultiple").get[Int]("64"), Right(prepared.domain.projection.compactSize % 64))
+      assertEquals(Files.readString(path.getParent.resolve("deletion-list-unmatched.jsonl")), "\"not-in-this-model\"\n")
+      Files.writeString(list, "\"ab\"\n")
+      intercept[DataException](PlanStore.loadVerified(path))
+    }
+  }
+
   test("saved plan creates analysis artifacts and verifies input identity and deterministic operations") {
     ProcessingFixtures.withModel { (_, input, output) =>
       val options = ProcessingOptions(outputRoot = output)

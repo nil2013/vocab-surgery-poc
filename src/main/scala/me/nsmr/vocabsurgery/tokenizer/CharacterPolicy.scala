@@ -17,6 +17,8 @@ final case class ForbiddenCharacter(character: CodePoint, reasons: Set[Forbidden
 /** Delete every token whose surface contains a forbidden scalar: one of `forbiddenScripts`, Han kanji outside the
   * Japanese reference, or an explicit code point. Math scalars are never forbidden, and tokens made only of them are kept.
   * `protectedIds` and `protectedContents` (encoded key, added-token text or decoded surface) are kept as well.
+  * `deletedContents` deletes tokens whose decoded surface (added-token text for added tokens) equals an entry;
+  * entries matching no token are not an error, so one list can serve several models.
   */
 final case class CharacterPolicy(
     japanese: JapaneseKanjiReference,
@@ -25,7 +27,8 @@ final case class CharacterPolicy(
     explicitForbidden: Set[CodePoint] = Set.empty,
     protectedIds: Set[OriginalTokenId] = Set.empty,
     protectedContents: Set[String] = Set.empty,
-    protectMath: Boolean = true
+    protectMath: Boolean = true,
+    deletedContents: Set[String] = Set.empty
 ) extends PruningPolicy with CharacterRule:
   val name = "characters"
   override def characterRule: Option[CharacterRule] = Some(this)
@@ -52,8 +55,17 @@ final case class CharacterPolicy(
       matched
     } ++ protectedIds
     tokens.iterator.flatMap { token =>
-      val delete = token.surface.toVector.flatMap(forbidden).flatMap(f => f.reasons.toVector.map(_.code).sorted.map(PolicyReason(_, Some(f.character))))
+      val listed = Option.when(listedSurface(token).exists(deletedContents))(PolicyReason("listed")).toVector
+      val delete = token.surface.toVector.flatMap(forbidden).flatMap(f => f.reasons.toVector.map(_.code).sorted.map(PolicyReason(_, Some(f.character)))) ++ listed
       val keep = Vector(Option.when(explicit(token.id))(PolicyReason("explicit")),
         Option.when(protectMath && token.surface.exists(_.codePoints.forall(UnicodeData.isMath)))(PolicyReason("math"))).flatten
       Option.when(delete.nonEmpty || keep.nonEmpty)(token.id -> PolicyDecision(delete, keep))
     }.toMap
+
+  /** The text a deletion-list entry is compared with: added-token content, or the decoded surface of a lexical token. */
+  def listedSurface(token: TokenCandidate): Option[String] = if token.added then Some(token.content) else token.surface.map(_.text)
+
+  /** Deletion-list entries that name no token of `tokens`. */
+  def unmatchedDeletions(tokens: Iterable[TokenCandidate]): Vector[String] =
+    val present = tokens.iterator.flatMap(listedSurface).toSet
+    deletedContents.toVector.filterNot(present).sorted

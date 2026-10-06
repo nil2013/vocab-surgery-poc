@@ -3,12 +3,14 @@ package me.nsmr.vocabsurgery.processing
 import io.circe.{Json, JsonObject}
 import java.nio.file.Path
 import me.nsmr.vocabsurgery.core.*
-import me.nsmr.vocabsurgery.io.{Diagnostics, JsonFields}
+import me.nsmr.vocabsurgery.io.{Diagnostics, FileIO, JsonFields}
 import me.nsmr.vocabsurgery.kanji.{JapaneseKanjiReference, KanjiData, KanjiLoader}
 import me.nsmr.vocabsurgery.tokenizer.*
 import me.nsmr.vocabsurgery.unicode.*
 
-/** Settings for `CharacterPolicy`. `japaneseReference` is the kanji-data directory the Japanese kanji set is built from. */
+/** Settings for `CharacterPolicy`. `japaneseReference` is the kanji-data directory the Japanese kanji set is built from;
+  * `deletedTokens` names an optional deletion list (see `DeletionList`).
+  */
 final case class CharacterPolicySettings(
     japaneseReference: Path = Path.of("kanji-data"),
     forbiddenScripts: Set[UnicodeScript] = Set(UnicodeScript.Arabic, UnicodeScript.Cyrillic, UnicodeScript.Hangul),
@@ -17,18 +19,21 @@ final case class CharacterPolicySettings(
     explicitForbidden: Set[CodePoint] = Set.empty,
     protectedIds: Set[OriginalTokenId] = Set.empty,
     protectedContents: Set[String] = Set.empty,
-    protectMath: Boolean = true
+    protectMath: Boolean = true,
+    deletedTokens: Option[Path] = None
 ) extends PolicySettings:
   def kind: PolicyKind = CharacterPolicySettings
-  def inputs: Vector[Path] = Vector(japaneseReference)
-  def resolved: CharacterPolicySettings = copy(japaneseReference = japaneseReference.toRealPath())
+  def inputs: Vector[Path] = japaneseReference +: deletedTokens.toVector
+  def resolved: CharacterPolicySettings = copy(japaneseReference = japaneseReference.toRealPath(), deletedTokens = deletedTokens.map(_.toRealPath()))
 
-  def domain(reference: JapaneseKanjiReference): CharacterPolicy =
-    CharacterPolicy(reference, forbiddenScripts, pruneHanOutsideReference, explicitForbidden, protectedIds, protectedContents, protectMath)
+  def domain(reference: JapaneseKanjiReference, deleted: Set[String] = Set.empty): CharacterPolicy =
+    CharacterPolicy(reference, forbiddenScripts, pruneHanOutsideReference, explicitForbidden, protectedIds, protectedContents, protectMath, deleted)
 
   def load(): LoadedPolicy =
     val data = KanjiLoader.load(japaneseReference)
-    CharacterPolicySettings.Loaded(domain(JapaneseKanjiReference.from(data, japaneseExtra)), data, ProcessingIO.revision(japaneseReference))
+    val deleted = deletedTokens.map(DeletionList.read).getOrElse(Vector.empty)
+    CharacterPolicySettings.Loaded(domain(JapaneseKanjiReference.from(data, japaneseExtra), deleted.toSet), data,
+      ProcessingIO.revision(japaneseReference), deletedTokens.map(FileIO.sha256(_)))
 
   def json: Json = Json.obj(
     "japaneseReference" -> Json.fromString(japaneseReference.toString),
@@ -41,13 +46,14 @@ final case class CharacterPolicySettings(
     "protectedContents" -> Json.fromValues(protectedContents.toVector.sorted.map(Json.fromString)),
     "unregisteredRows" -> Json.fromString("drop"),
     "protectMath" -> Json.fromBoolean(protectMath))
+    .mapObject(fields => deletedTokens.fold(fields)(path => fields.add("deletedTokens", Json.fromString(path.toString))))
 
 object CharacterPolicySettings extends PolicyKind:
   val name = "characters"
 
   def parse(fields: JsonObject, path: Path): CharacterPolicySettings =
     val names = Set("japaneseReference", "unicodeVersion", "forbiddenScripts", "pruneHanOutsideReference", "japaneseExtra",
-      "explicitForbidden", "protectedIds", "protectedContents", "unregisteredRows", "protectMath")
+      "explicitForbidden", "protectedIds", "protectedContents", "unregisteredRows", "protectMath", "deletedTokens")
     fields.keys.find(!names(_)).foreach(name => Diagnostics.invalid(path, name, "unknown policy field"))
     fields("unicodeVersion").foreach(v => Diagnostics.check(JsonFields.text(v, path, "unicodeVersion") == UnicodeData.provenance.unicodeVersion, path, "unicodeVersion", "Unicode version does not match pinned provider"))
     fields("unregisteredRows").foreach(v => Diagnostics.check(JsonFields.text(v, path, "unregisteredRows") == "drop", path, "unregisteredRows", "only drop is supported"))
@@ -61,9 +67,9 @@ object CharacterPolicySettings extends PolicyKind:
       flag("pruneHanOutsideReference"), points("japaneseExtra"), points("explicitForbidden"),
       array("protectedIds").getOrElse(Vector.empty).map(v => OriginalTokenId(JsonFields.int(v, path, "protectedIds"))).toSet,
       array("protectedContents").getOrElse(Vector.empty).map(v => JsonFields.text(v, path, "protectedContents")).toSet,
-      flag("protectMath"))
+      flag("protectMath"), fields("deletedTokens").map(v => Path.of(JsonFields.text(v, path, "deletedTokens"))))
 
-  private final case class Loaded(policy: CharacterPolicy, data: KanjiData, revision: Option[String]) extends LoadedPolicy:
+  private final case class Loaded(policy: CharacterPolicy, data: KanjiData, revision: Option[String], deletedTokensSha256: Option[String]) extends LoadedPolicy:
     private val reference = policy.japanese
     private def hashes: Json = Json.obj(reference.sourceHashes.toVector.sortBy(_._1).map((name, hash) => name -> Json.fromString(hash))*)
     private def outsideReference(token: TokenAnalysis): Vector[PolicyReason] = token.deletion.filter(_.code == ForbiddenReason.HanOutsideJapaneseReference.code)
@@ -72,10 +78,19 @@ object CharacterPolicySettings extends PolicyKind:
       "unicode" -> Json.obj("provider" -> Json.fromString(reference.unicode.provider), "providerVersion" -> Json.fromString(reference.unicode.providerVersion),
         "unicodeVersion" -> Json.fromString(reference.unicode.unicodeVersion)),
       "hanDefinition" -> Json.fromString("Script=Han && General_Category=Lo"))
+      .mapObject(fields => deletedTokensSha256.fold(fields)(hash => fields.add("deletedTokensSha256", Json.fromString(hash))))
+
+    private def unmatched(analysis: VocabularyAnalysis): Vector[String] =
+      policy.unmatchedDeletions(analysis.tokens.map(t => TokenCandidate(t.id, t.content, t.surface, t.decoded, t.protection(ProtectionReason.AddedToken))))
+    private def listed(analysis: VocabularyAnalysis): Vector[TokenAnalysis] = analysis.tokens.filter(_.deletion.exists(_.code == "listed"))
 
     override def summary(analysis: VocabularyAnalysis): Json =
       val candidates = analysis.tokens.filter(outsideReference(_).nonEmpty)
-      Json.obj("hanCandidates" -> Json.fromInt(candidates.size), "hanExamples" -> Json.fromValues(candidates.take(10).flatMap(_.surface).map(s => Json.fromString(s.text))))
+      val missing = unmatched(analysis)
+      Json.obj("hanCandidates" -> Json.fromInt(candidates.size), "hanExamples" -> Json.fromValues(candidates.take(10).flatMap(_.surface).map(s => Json.fromString(s.text))),
+        "deletionList" -> Json.obj("entries" -> Json.fromInt(policy.deletedContents.size), "matchedTokens" -> Json.fromInt(listed(analysis).size),
+          "keptByProtection" -> Json.fromInt(listed(analysis).count(_.protectedToken)), "unmatchedEntries" -> Json.fromInt(missing.size),
+          "unmatchedExamples" -> Json.fromValues(missing.take(10).map(Json.fromString))))
 
     override def writeReports(analysis: VocabularyAnalysis, directory: Path): Unit =
       ProcessingIO.write(directory.resolve("japanese-kanji-reference.json"), Json.fromValues(reference.sortedCharacters.map(cp => Json.fromInt(cp.intValue))))
@@ -98,4 +113,5 @@ object CharacterPolicySettings extends PolicyKind:
       ProcessingIO.lines(directory.resolve("han-pruning-candidates.jsonl"), analysis.tokens.iterator.filter(outsideReference(_).nonEmpty).map(t => Json.obj(
         "originalId" -> Json.fromInt(t.id.intValue), "surface" -> t.surface.fold(Json.Null)(s => Json.fromString(s.text)), "protected" -> Json.fromBoolean(t.protectedToken),
         "codePoints" -> Json.fromValues(outsideReference(t).flatMap(_.character).map(cp => Json.fromInt(cp.intValue))))))
+      ProcessingIO.lines(directory.resolve("deletion-list-unmatched.jsonl"), unmatched(analysis).iterator.map(Json.fromString))
       ProcessingIO.lines(directory.resolve("kanji-missing-texts.jsonl"), data.glyphDiagnostics.iterator.map(d => Json.obj("record" -> Json.fromLong(d.recordNumber), "rawText" -> Json.fromString(d.rawText), "reason" -> Json.fromString(d.reason))))

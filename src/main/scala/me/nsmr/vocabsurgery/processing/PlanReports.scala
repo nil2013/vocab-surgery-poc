@@ -50,4 +50,5 @@ object PlanReports:
       "directDeleted" -> Json.fromInt(domain.analysis.cleanup.directDeleted.size), "indirectDeleted" -> Json.fromInt(domain.analysis.cleanup.indirectDeleted.size),
       "unregisteredRows" -> Json.fromInt(domain.analysis.unregisteredIds.size), "protectedConflicts" -> Json.fromInt(domain.analysis.protectedConflicts.size),
       "policy" -> plan.loadedPolicy.summary(domain.analysis),
+      "rowsAboveMultiple" -> Json.obj(Vector(64, 128, 256).map(m => m.toString -> Json.fromInt(domain.projection.compactSize % m))*),
       "savedPayloadBytes" -> Json.fromLong(domain.savedPayloadBytes.longValue)))
