@@ -4,6 +4,8 @@
 
 初期の削除対象は Unicode の Script プロパティで判定する Arabic・Cyrillic・Hangul と、日本語漢字の参照集合に含まれない Han 漢字とする。一覧外の漢字は自己用途の判定として簡体字・繁体字と推定し、削除根拠にしてよい。語彙削減による不要表記の混入減少は評価仮説であり、生成禁止を保証する仕様にはしない。
 
+追加の合意として、Math binary property が true の文字を既定で保護し、policy で切り替えられるようにする。新規 policy format は version 2、既存 version 1 の意味と hash は維持する。Greek／Canadian_Aboriginal を残す日英 coding profile と、`个`・`开`・`关`・`无`・`网` の明示禁止・用例・加工結果は [追加 policy の記録](../docs/PRUNING_JA_EN_CODING_V2.md) を参照。初期版の記録件数とは区別する。
+
 漢字の判定を具体化する参照データとして、追加された `kanji-data` submodule を利用する。採用した漢字一覧の和集合から日本語漢字の保護集合を作り、Han 漢字の削除判定に使用する。
 
 ## 決定事項と提案事項

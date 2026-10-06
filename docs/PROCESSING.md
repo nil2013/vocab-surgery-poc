@@ -4,14 +4,15 @@
 
 ## 計画と入力の同一性
 
-`PolicySettings` は version 1 の JSON を読み、未知の field、型違い、null、未対応値を拒否する。省略した fields は初期値となる。例えば全 default を明記した policy は以下。
+`PolicySettings` は version 1／2 の JSON を読み、未知の field、型違い、null、未対応値を拒否する。新規設定は version 2 で、`protectMath=true` が既定値。version 1 は従来どおり Math 保護なしで読み書きし、保存済み plan と manifest の policy hash・意味を維持する。例えば現在の全 default を明記した policy は以下。
 
 ```json
 {
-  "formatVersion": 1,
+  "formatVersion": 2,
   "unicodeVersion": "17.0.0",
   "forbiddenScripts": ["Arabic", "Cyrillic", "Hangul"],
   "pruneHanOutsideReference": true,
+  "protectMath": true,
   "japaneseExtra": [],
   "explicitForbidden": [],
   "protectedIds": [],
@@ -22,6 +23,10 @@
 ```
 
 文字集合は Unicode scalar の整数値、ID は旧整数 ID、content は文字列で指定する。`protectedContents` は added token の literal、既存の encoded key、decoded UTF-8 surface を照合する。存在しない保護指定は停止条件。`parameterCount` の別値 `verified-logical-weights` はドメインの検証済み logical weight 数を採用する。未登録行 policy は現在 `drop` のみ。
+
+`protectMath=true` は ICU の `Math=true` の scalar を Script／Han／明示禁止判定から除外する。Math の文字だけからなる token は `Math` 理由で BPE cleanup からも保護する。混在 token に別の禁止文字があれば削除対象になる。`false` はこの追加保護だけを無効にし、基礎 bytes・protocol・手動保護を解除しない。`α`・`λ`・`א` の数学用途は Math 属性に含まれないため、Script の選択や明示保護で扱う。
+
+version 1 の JSON に `protectMath` を追加することはできない。既存設定を変更する場合は新しい version 2 policy で新規 plan を作る。plan／manifest 自体の container formatVersion は引き続き 1 で、policy の version と別に管理する。日英 coding 用の追加 profile は [PRUNING_JA_EN_CODING_V2.md](PRUNING_JA_EN_CODING_V2.md) を参照。
 
 `PlanStore.prepare` は source／漢字 directory の実 path を確定し、loaders、policy、`ModelOperations.plan` を合成する。`InputInventory` は全ファイルの相対名、サイズ、mtime、file key を記録する。metadata と assets は全 SHA-256、safetensors は header SHA-256 を記録する。plan 時点では巨大な payload 全体の hash は計算しない。入力の cache file symlink は参照できるが、symlink directory、特殊ファイル、index 外の safetensors は拒否する。
 

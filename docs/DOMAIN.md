@@ -22,13 +22,15 @@
 
 ## 漢字・Unicode
 
-ICU4J 78.3 の bundled Unicode 17.0.0 を使用し、Script、General_Category、NFC を host JDK の Unicode 版から独立させる。実行時に Unicode 版を照合し、provider／library version／Unicode version を保持する。外部 UCD files の hash を取得したと扱わない。
+ICU4J 78.3 の bundled Unicode 17.0.0 を使用し、Script、General_Category、Math binary property、NFC を host JDK の Unicode 版から独立させる。実行時に Unicode 版を照合し、provider／library version／Unicode version を保持する。外部 UCD files の hash を取得したと扱わない。
 
 参照集合は採用した 6 source の字体 fields の和集合 `raw` と、各 scalar を NFC にした `normalized`、指定した `additional` の和である。元字体を捨てず、正規化後の字体にも収録元を紐づける。source hashes と missing-text diagnostics を保持し、画像や説明文から字を補わない。`fromCharacters` は合成テストや明示した小集合の実験用 factory である。
 
 初期の禁止判定は Arabic／Cyrillic／Hangul、参照集合外の `Script=Han && General_Category=Lo`、明示した code points の和を使う。Han の数詞・踊り字・部首・variation selectors を Han 漢字扱いしない。追加の Script／文字／保護 ID／保護 content は `PruningPolicy` の typed fields で指定する。JSON policy の形式は [PROCESSING.md](PROCESSING.md) を参照。`forbidden(CodePoint)` と `forbidden(TokenSurface)` は同じ predicate を使い、評価時の generated scalar 判定にも利用する。手動保護 content は encoded key と literal added token に加え、decoded surface でも照合する。
 
 日本語漢字の収録は Han 判定にだけ作用する。日本語と禁止文字を含む混在 token も禁止文字を理由に直接削除できる。明示した token 保護は削除判定より優先する。
+
+`PruningPolicy.protectMath` の既定値は true。Math scalar は `forbidden(CodePoint)` で禁止理由を付けず、scalar と generated-text metrics の判定を共通にする。Math scalar のみで構成された token は `ProtectionReason.Math` で graph cleanup からも保護する。Math と非 Math の禁止文字を含む混在 token 全体を無条件に保護することはしない。Math 属性は人が数学で使う全文字の集合ではない。
 
 ## Tokenizer と BPE
 
@@ -88,7 +90,7 @@ val savedBytes = plan.savedPayloadBytes.longValue
 
 `KanjiOperationsSuite`、`VocabularySuite`、`BpeGraphSuite`、`MetadataOperationsSuite`、`TensorOperationsSuite`、`ModelOperationsSuite` が正常系と不正入力を検証する。property tests は ByteLevel の全単射、projection の双方向性、BPE cleanup の固定点、NFC closure、コピー範囲と実際の小行列抽出の一致を検査する。第一工程の I/O と loader tests も保持する。
 
-ローカル snapshot では 512 MiB の test heap で 9 shards／1,891 tensors の metadata と更新計画を検証した。初期 policy の結果は K=128,803、直接削除 22,866、間接削除 0、未登録行削除 267、payload 削減 53,298,432 bytes。変わる shard は 2 個で、残る 7 個の payload と header は同じである。この結果は固定 snapshot・初期 policy に対する記録であり、他の snapshot に強制する定数ではない。
+ローカル snapshot では 512 MiB の test heap で 9 shards／1,891 tensors の metadata と更新計画を検証した。記録済みの version 1 初期 policy（Math 保護なし）の結果は K=128,803、直接削除 22,866、間接削除 0、未登録行削除 267、payload 削減 53,298,432 bytes。`LocalSnapshotSuite` はこの baseline を明示して保持する。変わる shard は 2 個で、残る 7 個の payload と header は同じである。この結果は固定 snapshot・初期 policy に対する記録であり、他の snapshot に強制する定数ではない。
 
 追加の参照 tokenizer 検証では、oMLX 環境の `tokenizers 0.23.2` が更新済み JSON をロードでき、参照漢字 10,086 字の NFC が ICU と一致すること、日本語・Python／Scala／TypeScript・FIM・tool-call 等の 8 入力が round trip することを確認した。再実行の opt-in property は [README](../README.md) を参照する。Python process の memory は JVM の 512 MiB 上限に含まれない。
 

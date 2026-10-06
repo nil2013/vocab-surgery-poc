@@ -21,7 +21,7 @@ sbt --batch testFull
 sbt --batch ';set Test / javaOptions += "-DvocabSurgery.snapshot=models/models--mlx-community--Qwen3-Coder-Next-4bit/snapshots/7b9321eabb85ce79625cac3f61ea691e4ea984b5";testOnly me.nsmr.vocabsurgery.model.LocalSnapshotSuite'
 ```
 
-この integration test は指定 snapshot の設定・tokenizer・index と 9 個の shard headers を読み取り、仕様に記録した件数・byte 数とドメインの更新計画を検証する。元ファイルを書き換えず、payload の hash や推論品質は検証しない。
+この integration test は指定 snapshot の設定・tokenizer・index と 9 個の shard headers を読み取り、version 1 初期 policy（Math 保護なし）で仕様に記録した件数・byte 数とドメインの更新計画を検証する。元ファイルを書き換えず、payload の hash や推論品質は検証しない。
 
 `tokenizers` をインストール済みの Python を test JVM の `vocabSurgery.tokenizersPython` property に追加すると、更新済み tokenizer JSON の参照実装でのロード、10,086 字の NFC 一致、日本語・coding・protocol 入力の round trip も検証する。Python process はネットワークにアクセスせず、一時ファイルは終了時に削除する。この workspace の oMLX で使われる Python では次を実行できる。異なる環境では Python の絶対 path を置換する。
 
@@ -84,6 +84,8 @@ scripts/vocab-surgery verify --manifest "$RUN/manifest.json" --python "$EVAL_PYT
 `inspect`／`plan` は重み payload を読まず、分析と更新計画を保存する。`plan` は新しい run、または同じ source の `inspection.json` だけを持つ run を受け付ける。既存の計画・モデル・report は上書きしない。標準出力は結果 JSON、標準エラーは進捗と診断。
 
 初期 policy は Unicode 17.0.0 の Arabic／Cyrillic／Hangul と、日本語参照集合外の Han 漢字を対象とする。変更には `plan --policy outputs/config/pruning.json` を使う。[policy と処理設計](docs/PROCESSING.md) に形式、保護集合、容量、staging、失敗時の再実行方法を記載している。未加工 shard は APFS clone を試し、失敗時は bounded copy に切り替える。`apply --copy-only` で clone を無効にできる。
+
+現在の新規 policy は version 2 で、`protectMath=true` を既定にする。日英 coding 用の追加削減には `--policy policies/ja-en-coding-v2.json` を指定できる。この profile は Greek／Canadian_Aboriginal を残し、他の追加 Script と `个`・`开`・`关`・`无`・`网` を対象とする。[設定・用例・加工結果](docs/PRUNING_JA_EN_CODING_V2.md)を参照。
 
 上記の一連の操作は次でも実行できる。
 

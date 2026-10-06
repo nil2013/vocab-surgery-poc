@@ -9,6 +9,7 @@ Purpose: Qwen3-Coder-Next MLX vocabulary and embedding / LM-head pruning with oM
 - Use [docs/DOMAIN.md](docs/DOMAIN.md) for Unicode / kanji policy, BPE cleanup, projection, token-reference schemas, or pure model-update plans.
 - Use [docs/PROCESSING.md](docs/PROCESSING.md) for saved plans, input inventories, output boundaries, staging, publication, or full checkpoint verification.
 - Use [docs/EVALUATION.md](docs/EVALUATION.md) for oMLX helpers, fixed suites, metrics, code execution, or evaluation conclusions. Keep a failed logits gate and pending human ratings visible; do not infer TASK completion from a successful command.
+- Use [docs/PRUNING_JA_EN_CODING_V2.md](docs/PRUNING_JA_EN_CODING_V2.md) when changing `policies/ja-en-coding-v2.json` or its Math / manual-Han decisions.
 - Use [outputs/SPEC.md](outputs/SPEC.md) when changing surgery requirements or acceptance criteria. Distinguish agreed requirements from initial proposed thresholds.
 - Use [kanji-data/README.md](kanji-data/README.md) when changing which reference files or fields are consumed.
 
@@ -26,6 +27,7 @@ Purpose: Qwen3-Coder-Next MLX vocabulary and embedding / LM-head pruning with oM
 - Stream checkpoint data with bounded buffers and checked `Long` arithmetic. Metadata loaders read headers / sizes, not tensor payloads. Safetensors offsets are payload-relative.
 - Keep create-new output semantics; staging / publication belongs in the processing layer. Preserve contextual `DataException` diagnostics.
 - Recompute saved plans against current inputs before execution; plan-time weight hashes cover headers only, while apply / verify record and check complete file hashes. CLI publication requires the external reference tokenizer check.
+- Preserve version 1 policy serialization and semantics for existing plan / manifest hashes. New policies use version 2 with Math protection enabled by default; change policy through a new plan.
 - Slice packed weights, scales, and biases in identical projected row order, without re-quantization or Transformer / MoE changes.
 
 ## Verification
