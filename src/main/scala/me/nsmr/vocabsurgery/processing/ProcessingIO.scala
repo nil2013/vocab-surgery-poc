@@ -7,7 +7,7 @@ import java.security.MessageDigest
 import scala.util.Using
 import me.nsmr.vocabsurgery.io.*
 
-private[processing] object ProcessingIO:
+private[vocabsurgery] object ProcessingIO:
   val ToolVersion = "0.1.0-SNAPSHOT"
   val printer: Printer = Printer.noSpaces.copy(sortKeys = true)
   def canonical(json: Json): String = printer.print(json)

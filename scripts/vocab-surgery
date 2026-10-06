@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+REPO_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+if [ ! -d "$REPO_DIR/target/cli/lib" ]; then
+  echo 'CLI jars are missing. Run: sbt --batch stageCli' >&2
+  exit 2
+fi
+cd "$REPO_DIR"
+if [ -n "${JAVA_HOME:-}" ]; then
+  task_java="$JAVA_HOME/bin/java"
+elif [ -x /opt/homebrew/opt/openjdk/bin/java ]; then
+  task_java=/opt/homebrew/opt/openjdk/bin/java
+elif [ -x /usr/local/opt/openjdk/bin/java ]; then
+  task_java=/usr/local/opt/openjdk/bin/java
+else
+  task_java=java
+fi
+exec "$task_java" --enable-native-access=ALL-UNNAMED -Xmx512m -cp "$REPO_DIR/target/cli/lib/*" me.nsmr.vocabsurgery.cli.Main "$@"
