@@ -46,6 +46,9 @@ class VocabularySuite extends munit.ScalaCheckSuite:
     val pruned = VocabularyOperations.analyze(tokenizer, TokenizerFixtures.rows(tokenizer), policy)
     assertEquals(pruned.cleanup.directDeleted, Set(TokenizerFixtures.id(tokenizer, arabic)))
     assert(pruned.projection.compact(TokenizerFixtures.id(tokenizer, "<tool_call>")).isDefined)
+    val literalSurface = VocabularyOperations.analyze(tokenizer, TokenizerFixtures.rows(tokenizer), policy.copy(protectedContents = Set("ع")))
+    assert(literalSurface.projection.compact(TokenizerFixtures.id(tokenizer, arabic)).isDefined)
+    assert(literalSurface.tokens.find(_.content == arabic).get.protection(ProtectionReason.Explicit))
   }
 
   test("analysis diagnoses missing protocol, byte alphabet, unknown protection and inconsistent token identities") {
