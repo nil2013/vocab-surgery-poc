@@ -9,6 +9,7 @@ Purpose: Qwen3-Coder-Next MLX vocabulary and embedding / LM-head pruning with oM
 - Use [docs/DOMAIN.md](docs/DOMAIN.md) for Unicode / kanji policy, BPE cleanup, projection, token-reference schemas, or pure model-update plans.
 - Use [docs/PROCESSING.md](docs/PROCESSING.md) for saved plans, input inventories, output boundaries, staging, publication, or full checkpoint verification.
 - Use [docs/EVALUATION.md](docs/EVALUATION.md) for oMLX helpers, fixed suites, metrics, code execution, or evaluation conclusions. Keep a failed logits gate and pending human ratings visible; do not infer TASK completion from a successful command.
+- Use [test-data/docs/cases.md](test-data/docs/cases.md) and [test-data/docs/metrics.md](test-data/docs/metrics.md) when changing replay / synthetic case adapters or interpreting their scores.
 - Use [docs/PRUNING_JA_EN_CODING_V2.md](docs/PRUNING_JA_EN_CODING_V2.md) when changing `policies/ja-en-coding-v2.json` or its Math / manual-Han decisions.
 - Use [outputs/SPEC.md](outputs/SPEC.md) when changing surgery requirements or acceptance criteria. Distinguish agreed requirements from initial proposed thresholds.
 - Use [kanji-data/README.md](kanji-data/README.md) when changing which reference files or fields are consumed.
@@ -17,6 +18,7 @@ Purpose: Qwen3-Coder-Next MLX vocabulary and embedding / LM-head pruning with oM
 
 - `models` links to the Hugging Face cache. Keep snapshots and symlink targets read-only; write generated models and analysis to `outputs`, without hard links to inputs.
 - `kanji-data` is an upstream submodule. Loader changes must not incidentally edit its data or advance its revision. Initialize it when needed: `git submodule update --init kanji-data`.
+- `test-data` is an upstream evaluation submodule; keep cases and its revision unchanged during evaluation. Its runners write into the submodule; use `scripts/evaluate_testdata.py` to save comparisons under `outputs`. Initialize it when needed: `git submodule update --init test-data`.
 - `outputs/SPEC.md` is tracked documentation. Other generated outputs, `target/` directories, and IDE / Scala caches are ignored artifacts; do not hand-edit or commit them.
 
 ## Data and architecture constraints

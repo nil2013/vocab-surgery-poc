@@ -16,6 +16,7 @@ sys.path.insert(0, str(SCRIPTS))
 import evaluate
 import logits
 import code_checks
+import evaluate_testdata
 
 spec = importlib.util.spec_from_file_location("make_suite", SCRIPTS / "make-suite.py")
 make_suite = importlib.util.module_from_spec(spec)
@@ -106,6 +107,55 @@ class EvaluationTests(unittest.TestCase):
         with fake_server(body) as (url, _):
             result = evaluate.Omlx(url).stream("model", next(row for row in make_suite.cases() if row["category"] == "tool"))
             self.assertEqual(json.loads(result["toolCalls"][0]["function"]["arguments"]), {"a": 2, "b": 3})
+
+    def test_stream_preserves_testdata_sampling_and_tool_choice(self):
+        case = next(row for row in make_suite.cases() if row["category"] == "tool")
+        with fake_server(response()) as (url, server):
+            evaluate.Omlx(url).stream("model", case, temperature=.7, seed=1, top_p=.8, tool_choice="none")
+            request = server.last_request
+            self.assertEqual((request["temperature"], request["seed"], request["top_p"], request["tool_choice"]), (.7, 1, .8, "none"))
+            self.assertEqual(request["tools"], case["tools"])
+            evaluate.Omlx(url).stream("model", case, top_p=None)
+            self.assertNotIn("top_p", server.last_request)
+            self.assertNotIn("tool_choice", server.last_request)
+        for top_p in [0, 1.1, math.nan]:
+            with self.assertRaises(ValueError):
+                evaluate.Omlx("http://localhost").stream("model", case, top_p=top_p)
+
+    @unittest.skipUnless(Path("test-data/cases/synthetic/suite.json").is_file(), "test-data submodule required")
+    def test_testdata_inputs_and_fixed_scoring_contract(self):
+        suite, replay, checks, metrics = evaluate_testdata.load_data(Path("test-data"))
+        self.assertEqual((len(suite["tests"]), len(replay)), (26, 35))
+        self.assertEqual(set(checks), {"lru", "count_by_year"})
+        cases = {case["id"]: case for case in suite["tests"]}
+        for identifier in ["verbatim_ja", "echo_greek_math"]:
+            expected = cases[identifier]["expect"]
+            self.assertTrue(evaluate_testdata.score_synthetic(cases[identifier], {"text": expected}, checks)["passed"])
+            self.assertFalse(evaluate_testdata.score_synthetic(cases[identifier], {"text": "wrong"}, checks)["passed"])
+        self.assertTrue(evaluate_testdata.score_synthetic(cases["translate_in_ko"], {"text": "会議は3時。資料を共有。"}, checks)["passed"])
+        self.assertFalse(evaluate_testdata.score_synthetic(cases["translate_in_ko"], {"text": "会議は3時。"}, checks)["passed"])
+        self.assertEqual(metrics("日本語ع", "ع")["leak"], 0)
+        self.assertEqual(metrics("日本語ع", "")["leak"], 1)
+
+    def test_testdata_pairs_require_matched_coverage_and_keep_nonconcluded_outputs_separate(self):
+        row = {"id": "case", "sample": 0, "group": "replay", "response": {"text": "日本語", "finishReason": "stop"},
+               "metrics": {"lang": "ja", "leak": 0}}
+        changed = {**row, "response": {"text": "中国語", "finishReason": "tool_calls"}}
+        pairs = evaluate_testdata.paired_changes([row], [changed])
+        self.assertFalse(pairs[0]["textIdentical"])
+        self.assertEqual(pairs[0]["firstScalarDifference"], 0)
+        self.assertEqual(evaluate_testdata.summarize_phase([row, changed])["replayConcluded"], 1)
+        for after in [[], [{**changed, "sample": 1}]]:
+            with self.assertRaises(ValueError):
+                evaluate_testdata.paired_changes([row], after)
+
+    @unittest.skipUnless(Path("test-data/cases/synthetic/suite.json").is_file() and Path("/usr/bin/sandbox-exec").is_file(), "test-data and macOS sandbox required")
+    def test_testdata_fixed_python_harness_runs_restricted_and_fails_wrong_code(self):
+        suite, _, checks, _ = evaluate_testdata.load_data(Path("test-data"))
+        case = next(case for case in suite["tests"] if case["id"] == "code_count_by_year")
+        code = "import datetime\ndef count_by_year(dates):\n result = {}\n for text in dates:\n  try:\n   year = datetime.date.fromisoformat(text).year\n  except ValueError:\n   continue\n  result[year] = result.get(year, 0) + 1\n return result\n"
+        self.assertTrue(evaluate_testdata.score_synthetic(case, {"text": "```python\n" + code + "```"}, checks)["passed"])
+        self.assertFalse(evaluate_testdata.score_synthetic(case, {"text": "```python\ndef count_by_year(dates): return {}\n```"}, checks)["passed"])
 
     def test_logit_gate_preserves_thresholds_and_rejects_bad_vectors(self):
         self.assertTrue(logits.compare([1.0, 2.0], [1.0, 2.001])["passed"])

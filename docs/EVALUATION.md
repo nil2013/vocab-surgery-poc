@@ -66,6 +66,34 @@ evaluation directory に suite、forbidden scalars、tokenization、logits、bas
   --ratings outputs/reviews/my-first-run-ratings.json --out "$RUN/reviewed-metrics.json"
 ```
 
+## test-data の同条件比較
+
+`test-data` は独立した upstream submodule。ケースの定義と近似は [cases.md](../test-data/docs/cases.md)、採点の意味は [metrics.md](../test-data/docs/metrics.md) を参照する。既存の履歴出力や別ホストの測定を baseline に使わず、元モデルと加工モデルに同じ固定入力・sampling パラメータを送り直す。
+
+[evaluate_testdata.py](../scripts/evaluate_testdata.py) は、合成26ケース（seed 展開後38リクエスト）、replay35ケース、既存 suite の速度測定6ケースを比較する。replay は既定で各2 samples、temperature .7、top_p .8、seed 0 / 1、max_tokens 4000。合成テストは入力に指定されたパラメータを保持し、top_p 未指定なら request でも省略する。速度は greedy、warm-up 1回・測定5回、同時実行1、prefix cache 無効で測定する。
+
+先に `verify` を実行し、成功 report を渡す。専用 server の起動は前節と同じ。以下の出力先は例で、再実行時は新しい directory にする。
+
+```sh
+RUN=outputs/runs/ja-en-coding-v2
+EVAL_PYTHON=/opt/homebrew/Cellar/omlx/0.7.0rc1/libexec/bin/python3.11
+scripts/vocab-surgery verify --manifest "$RUN/manifest.json" --python "$EVAL_PYTHON" \
+  --report "$RUN/testdata-verification.json"
+"$EVAL_PYTHON" scripts/logits.py compare --manifest "$RUN/manifest.json" --output "$RUN/testdata-logits"
+"$EVAL_PYTHON" scripts/serve-evaluation.py --manifest "$RUN/manifest.json" \
+  --server-dir outputs/servers/testdata-comparison --port 8302
+"$EVAL_PYTHON" scripts/evaluate_testdata.py --manifest "$RUN/manifest.json" \
+  --verification-report "$RUN/testdata-verification.json" \
+  --server-environment outputs/servers/testdata-comparison/server.json \
+  --test-data test-data --output "$RUN/testdata-comparison"
+```
+
+`logits.py` の比較と teacher-forced 速度測定中は、server にモデルをロードせず、hash 検証や別の benchmark を同時に実行しない。oMLX の比較も baseline → unload → pruned → unload の順で行う。native decode tok/s と TTFT、scalar/s を保存し、入力長・生成内容の異なる replay の速度を、そのまま一つの性能値にまとめない。
+
+helper はケースと hash、submodule revision、server・package情報、全応答、tokenization、同じ case / seed の変化、集計を `outputs` に保存する。upstream の runner は submodule 内の `results` を更新するため、この比較では使わない。合成テストの固定 Python harness は upstream から読み、[既存の sandbox](../scripts/code_checks.py) 内で実行する。replay の tool calls は記録するだけで、モデルが指示した操作を実行しない。合成 tool test のみ固定の結果を返す。
+
+`test-data` の leak は JIS X 0213 / Python Unicode と文脈内文字の除外による指標であり、surgery の ICU policy predicate とは別である。replay は `stop` かつ text がある応答だけを concluded として言語・混入を集計し、`tool_calls` / `length` を別に数える。合成の PASS は指定の文字一致・keywords・code harness 等の判定で、日本語品質の人による評価を代替しない。失敗時は部分 JSONL を保持して停止し、新しい出力先で再実行する。
+
 ## 2026-10-06 の実行確認
 
 固定 Qwen snapshot を 512 MiB JVM heap で加工し、K=128,803、全 1,891 tensors の byte 対応、payload 44,790,761,728 bytes、参照 tokenizer の検証に成功した。未対象の 7 shards は APFS clone。論理 model bytes は 44,855,965,826 → 44,795,576,221、payload 削減は 53,298,432 bytes。

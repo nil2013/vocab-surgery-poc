@@ -81,9 +81,15 @@ class Omlx:
             if error.code != 400:
                 raise
 
-    def stream(self, model, case, temperature=0.0, seed=2026, messages=None):
-        payload = {"model": model, "max_tokens": case["maxTokens"], "temperature": temperature, "top_p": 1.0,
+    def stream(self, model, case, temperature=0.0, seed=2026, messages=None, top_p=1.0, tool_choice=None):
+        if top_p is not None and (not math.isfinite(top_p) or not 0 < top_p <= 1):
+            raise ValueError("top_p must be in (0, 1]")
+        payload = {"model": model, "max_tokens": case["maxTokens"], "temperature": temperature,
                    "seed": seed, "stream": True, "stream_options": {"include_usage": True}}
+        if top_p is not None:
+            payload["top_p"] = top_p
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
         if case["kind"] == "completion":
             payload["prompt"] = case["prompt"]
             endpoint = "/completions"
