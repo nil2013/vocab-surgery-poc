@@ -68,7 +68,7 @@ tool は `a4dfe26`（policy を trait 化する前）、policy は `ja-en-coding
 
 ### TensorFold でのロード検査（2026-10-07）
 
-本番の serve 環境とは別に、TensorFold `cb2ebf05` を `outputs/tensorfold` に clone し、ブランチ `vocab-surgery-ple-token-ids`（`912415a`）で `ple-token-ids.json` を読む改造を加えた。改造は 4 ファイルで、PLE の hash に元の語彙数と元の ID（履歴と PLE EOS も元の ID）を使い、組み込みの draft 語彙リストを加工済み checkpoint では拒否する。専用の venv と CUDA 拡張の build directory を clone 内に置いた。検査 script と結果は `outputs/runs/flash-next-ja-en-coding-v2/tensorfold-load/`。
+本番の serve 環境とは別に、TensorFold `cb2ebf05` を `outputs/tensorfold` に clone し、ブランチ `vocab-surgery-ple-token-ids`（`912415a`）で `ple-token-ids.json` を読む改造を加えた。改造は 4 ファイルで、PLE の hash に元の語彙数と元の ID（履歴と PLE EOS も元の ID）を使う。続く `8afb41b` で、組み込みの draft 語彙リストを PLE 対応表で加工後の ID に変換して使うようにした（削除済みの token はリストから落ちる）。それ以前は加工済み checkpoint では拒否していた。専用の venv と CUDA 拡張の build directory を clone 内に置いた。検査 script と結果は `outputs/runs/flash-next-ja-en-coding-v2/tensorfold-load/`。
 
 | 検査 | 結果 |
 | --- | --- |
