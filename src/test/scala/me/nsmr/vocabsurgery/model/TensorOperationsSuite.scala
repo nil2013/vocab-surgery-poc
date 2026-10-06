@@ -24,6 +24,8 @@ class TensorOperationsSuite extends munit.ScalaCheckSuite:
     assertEquals(TensorOperations.projectRows(large, projection, ByteOffset(0)).copies.head.source.start.longValue, 4294967312L)
     val empty = TensorMetadata("empty", TensorDType.U8, Vector(3L, 0L), ByteRange(ByteOffset(0), ByteCount(0)))
     assert(TensorOperations.projectRows(empty, projection, ByteOffset(0)).copies.isEmpty)
+    val hugeEmpty = empty.copy(shape = Vector(3L, Long.MaxValue, Long.MaxValue, 0L))
+    assert(TensorOperations.projectRows(hugeEmpty, projection, ByteOffset(0)).copies.isEmpty)
     intercept[DomainException](TensorOperations.projectRows(large.copy(shape = Vector(2L, 12L)), projection, ByteOffset(0)))
     intercept[DomainException](TensorOperations.projectRows(large.copy(dataRange = ByteRange(ByteOffset(0), ByteCount(23))), projection, ByteOffset(0)))
     intercept[ArithmeticException](TensorOperations.projectRows(large, projection, ByteOffset(Long.MaxValue)))

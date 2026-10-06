@@ -16,7 +16,8 @@ object TensorOperations:
     DomainChecks.check(source.shape.nonEmpty && source.shape.head == projection.originalSize.toLong,
       "row-count-mismatch", source.name, "axis 0 must match the original vocabulary")
     DomainChecks.check(source.expectedBytes == source.dataRange.length, "tensor-size-mismatch", source.name, "shape and range disagree")
-    val rowBytes = source.shape.tail.foldLeft(source.dtype.byteWidth.toLong)(Math.multiplyExact)
+    val rowBytes = if source.shape.tail.contains(0L) then 0L
+      else source.shape.tail.foldLeft(source.dtype.byteWidth.toLong)(Math.multiplyExact)
     val length = Math.multiplyExact(rowBytes, projection.compactSize.toLong)
     val result = TensorMetadata(source.name, source.dtype, projection.compactSize.toLong +: source.shape.tail,
       ByteRange(destination, ByteCount(length)))
