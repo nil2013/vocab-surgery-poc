@@ -123,4 +123,4 @@ sh -n scripts/vocab-surgery scripts/run-surgery.sh
 
 新しいモデル系列を追加する手順は [モデル系列と拡張境界](docs/MODEL_FAMILIES.md) を参照。[拡張性評価と設計提案](docs/EXTENSIBILITY.md) は、その境界を導入する前（`f2106a5`）に Ornith snapshot を素材として行った調査の記録である。
 
-追加 pruning を検討する際は、[初期 pruning 後の残存語彙調査（91fb703）](docs/REMAINING_VOCABULARY_91fb703.md) を参照。この版の policy で残る文字体系・語彙・記号の件数と例、数学文字との共用、集計条件を記録している。
+追加 pruning を検討する際は、[初期 pruning 後の残存語彙調査（91fb703）](docs/REMAINING_VOCABULARY_91fb703.md) を参照。Flash-Next の `ja-en-coding-v2` 加工後については [REMAINING_VOCABULARY_FLASH_NEXT.md](docs/REMAINING_VOCABULARY_FLASH_NEXT.md)。この版の policy で残る文字体系・語彙・記号の件数と例、数学文字との共用、集計条件を記録している。
