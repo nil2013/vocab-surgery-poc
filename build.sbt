@@ -12,6 +12,5 @@ lazy val root = project.in(file(".")).settings(
     "org.scalameta" %% "munit" % "1.0.4" % Test
   ),
   Test / fork := true,
-  Test / javaOptions ++= Seq("-Xmx512m") ++
-    sys.props.get("vocabSurgery.snapshot").map(value => s"-DvocabSurgery.snapshot=$value").toSeq
+  Test / javaOptions += "-Xmx512m"
 )
