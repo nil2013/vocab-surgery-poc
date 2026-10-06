@@ -333,7 +333,7 @@ checkpoint は metadata、tensor の shape・dtype・ファイル位置などで
 
 完了条件は、漢字一覧と対象 snapshot の metadata をロードできること、小さな合成ファイルで I/O を検証できること、不正形式・欠落ファイル・範囲外 offsets 等の診断を返せることである。
 
-第一工程は実装済み。Scala 3.3.8／sbt 2.0.10、Apache Commons CSV、Circe を使用し、6 種類の漢字 loader、モデル metadata と safetensors header の loader、共通の bounded I/O を整備した。ローカル snapshot の 9 shards・1,891 tensors の metadata 検査を含む全 23 テストと Scaladoc 生成を確認した。実行方法は [README](../README.md)、責務と I/O 制約は [インフラ層の設計](../docs/INFRASTRUCTURE.md) に記載する。pruning と checkpoint 加工の処理機構は後続工程で実装する。
+第一工程は実装済み。Scala 3.3.8／sbt 2.0.10、Apache Commons CSV、Circe を使用し、6 種類の漢字 loader、モデル metadata と safetensors header の loader、共通の bounded I/O を整備した。第一工程完了時には、ローカル snapshot の 9 shards・1,891 tensors の metadata 検査を含む全 23 テストと Scaladoc 生成を確認した。実行方法は [README](../README.md)、責務と I/O 制約は [インフラ層の設計](../docs/INFRASTRUCTURE.md) に記載する。checkpoint 加工の処理機構は後続工程で実装する。
 
 ### ドメイン概念と操作体系の整備
 
@@ -342,6 +342,8 @@ checkpoint は metadata、tensor の shape・dtype・ファイル位置などで
 操作は、値自身の意味に属するものをクラスに、生成・復元をコンパニオンオブジェクトに、複数の概念を組み合わせるものを操作オブジェクトに配置する。各概念の invariant を明記し、projection と merge graph 等の property tests をこの段階で整備する。
 
 完了条件は、メモリ上の小さなデータで漢字 policy、token 分類、merge cleanup、ID mapping と更新計画を検証できることである。
+
+第二工程は実装済み。ICU による漢字集合・NFC・Unicode 判定、ByteLevel 復元と token 保護、複数経路を扱う BPE cleanup、双方向 projection、tokenizer と schema 上の ID 更新、量子化 layout の検査、tensor／shard のコピー範囲と metadata 更新計画を純粋な操作として整備した。不正入力の例と property tests、責務・対応 schema・制約は [ドメイン操作の設計](../docs/DOMAIN.md) に記載する。固定 snapshot の初期 policy では K=128,803、payload 削減見積もり 53,298,432 bytes となる。これは更新計画の検証結果であり、加工モデルと oMLX 評価の完了を意味しない。
 
 ### 処理機構の実装
 

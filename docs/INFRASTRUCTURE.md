@@ -38,7 +38,7 @@ range コピーは最大 16 MiB の buffer を使用する。file positions と 
 
 康熙字典体の空欄は空の vector とし、`辨）（瓣）（辯` は 3 字体として読む。漢検の空欄・単一 scalar ではない文字テキストは `character=None` とし、record 番号と raw text を `GlyphDiagnostic` に残す。画像から文字を推定しない。
 
-この層では字体の NFC 正規化、保護集合の統合、Han の削除判定を実行しない。元データと解析済みの値を保持し、第二工程で操作体系を整備する。
+この層では字体の NFC 正規化、保護集合の統合、Han の削除判定を実行しない。元データと解析済みの値を保持し、[第二工程の操作](DOMAIN.md) に渡す。
 
 ## モデル metadata
 
@@ -60,7 +60,7 @@ header は `{` から始まる JSON とし、`__metadata__` は string map に�
 
 第一工程の dtype 対応は BOOL、I8／U8、I16／U16／F16／BF16、I32／U32／F32、I64／U64／F64。未知の dtype は `UnsupportedFormat` とし、誤った byte 幅を仮定しない。
 
-`encodeHeader` は supplied tensor metadata から順序を固定した JSON と space padding、length prefix を生成する。payload を書く機能や tensor row slicing は第三工程で実装する。
+`encodeHeader` は supplied tensor metadata から順序を固定した JSON と space padding、length prefix を生成する。第二工程の `ShardProjection.header` は元 header の未知 fields も保持する更新計画なので、将来の writer はこれを捨てずに使用する。payload を書く機能や tensor row slicing の実行は第三工程で実装する。
 
 ## 検証済みの範囲
 

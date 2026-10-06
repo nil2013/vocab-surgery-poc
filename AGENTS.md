@@ -6,6 +6,7 @@ Purpose: Qwen3-Coder-Next MLX vocabulary and embedding / LM-head pruning with oM
 
 - Use [README.md](README.md) for setup, loader experimentation with `sbt console`, and the exact opt-in local snapshot test command.
 - Use [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) for loader, data representation, diagnostic, or binary I/O changes.
+- Use [docs/DOMAIN.md](docs/DOMAIN.md) for Unicode / kanji policy, BPE cleanup, projection, token-reference schemas, or pure model-update plans.
 - Use [outputs/SPEC.md](outputs/SPEC.md) for pruning, projection, surgery, metadata rewriting, or evaluation changes. Distinguish agreed requirements from proposed values; verify proposed CLI examples against README / source before invoking them.
 - Use [kanji-data/README.md](kanji-data/README.md) when changing which reference files or fields are consumed.
 
@@ -35,11 +36,15 @@ Run from the repository root with JDK 17+. Compiler warnings are errors. No sepa
 | --- | --- |
 | Core types or common I/O | `io.InfrastructureSuite`, plus downstream suites affected by the contract |
 | Kanji parsing / records | `kanji.KanjiLoaderSuite` |
+| Unicode / kanji reference operations | `kanji.KanjiOperationsSuite`, plus `tokenizer.VocabularySuite` if classification changes |
+| ByteLevel, pruning, BPE, projection | `tokenizer.VocabularySuite`, `tokenizer.BpeGraphSuite` |
 | Config, tokenizer, index, snapshot | `model.ModelLoaderSuite` |
+| Tokenizer rewriting / metadata ID schemas | `model.MetadataOperationsSuite`, `model.ModelOperationsSuite` |
+| Tensor / shard projection or model-update plans | `model.TensorOperationsSuite`, `model.ModelOperationsSuite` |
 | Safetensors layout / binary I/O | `model.SafetensorsSuite`, plus `model.ModelLoaderSuite` if snapshot behavior changes |
 
 - For build / dependency or cross-package changes, use `sbt --batch testFull`. In sbt 2, `test` is incremental; `clean;test` does not replace `testFull`.
-- When real-checkpoint coverage is needed, run `model.LocalSnapshotSuite` using the README's test-JVM property setup. It expects the recorded Qwen snapshot. Without `vocabSurgery.snapshot`, it skips: do not count this as coverage or auto-download weights.
+- When real-checkpoint coverage is needed, run `model.LocalSnapshotSuite` using the README's test-JVM property setup. It expects the recorded Qwen snapshot. Without `vocabSurgery.snapshot`, it skips: do not count this as coverage or auto-download weights. Reference tokenizer / NFC comparison additionally requires the explicit `vocabSurgery.tokenizersPython` property; do not count an unset property as that coverage.
 - Kanji tests need the submodule. Tests use a 512 MiB forked heap and sparse temporary files; retain these checks for memory-sensitive I/O.
 - Run `sbt --batch doc` for Scaladoc changes. For prose-only changes, check links and `git diff --check`; Scala tests are unnecessary.
 

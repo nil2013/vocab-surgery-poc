@@ -2,7 +2,7 @@
 
 Qwen3-Coder-Next 4bit MLX モデルの不要な vocabulary と対応する embedding／LM head を削減する Scala プロジェクト。ビルドは sbt、package は `me.nsmr.vocabsurgery` を使用する。
 
-現時点では第一工程のインフラ層を実装済み。漢字参照データとモデル metadata を読み込み、shard headers と index の整合性を検査できる。pruning、checkpoint の加工 pipeline、CLI は後続工程で実装する。
+第一工程のインフラ層と第二工程のドメイン操作を実装済み。漢字参照データとモデル metadata の読み込み、語彙分類、BPE cleanup、ID projection、6 tensors の行抽出と metadata の更新計画を利用できる。checkpoint の加工 pipeline と CLI は後続工程で実装する。
 
 ## ビルドと検証
 
@@ -21,7 +21,15 @@ sbt --batch testFull
 sbt --batch ';set Test / javaOptions += "-DvocabSurgery.snapshot=models/models--mlx-community--Qwen3-Coder-Next-4bit/snapshots/7b9321eabb85ce79625cac3f61ea691e4ea984b5";testOnly me.nsmr.vocabsurgery.model.LocalSnapshotSuite'
 ```
 
-この integration test は指定 snapshot の設定・tokenizer・index と 9 個の shard headers を読み取り、仕様に記録した件数・byte 数を照合する。元ファイルを書き換えず、payload の hash や推論品質は検証しない。
+この integration test は指定 snapshot の設定・tokenizer・index と 9 個の shard headers を読み取り、仕様に記録した件数・byte 数とドメインの更新計画を検証する。元ファイルを書き換えず、payload の hash や推論品質は検証しない。
+
+`tokenizers` をインストール済みの Python を test JVM の `vocabSurgery.tokenizersPython` property に追加すると、更新済み tokenizer JSON の参照実装でのロード、10,086 字の NFC 一致、日本語・coding・protocol 入力の round trip も検証する。Python process はネットワークにアクセスせず、一時ファイルは終了時に削除する。この workspace の oMLX で使われる Python では次を実行できる。異なる環境では Python の絶対 path を置換する。
+
+```sh
+sbt --batch ';set Test / javaOptions ++= Seq("-DvocabSurgery.snapshot=models/models--mlx-community--Qwen3-Coder-Next-4bit/snapshots/7b9321eabb85ce79625cac3f61ea691e4ea984b5", "-DvocabSurgery.tokenizersPython=/opt/homebrew/Cellar/omlx/0.7.0rc1/libexec/bin/python3.11");testOnly me.nsmr.vocabsurgery.model.LocalSnapshotSuite'
+```
+
+snapshot 未指定時は integration test 全体をスキップする。Python 未指定時は metadata／計画の検証まで実行し、参照実装との比較は行わない。モデル・Python packages の自動ダウンロードはしない。
 
 sbt 2 の `test` は変更の影響があるテストを実行する。全テストを cache によらず実行するには `testFull` を使う。[sbt の testing task](https://www.scala-sbt.org/2.x/docs/en/reference/sbt-test.html)
 
@@ -49,4 +57,4 @@ loader は失敗時に入力 path、field／record、原因を持つ `DataExcept
 
 モデル入力は `models`、将来の加工モデル・分析結果は `outputs` に配置する。ローカル cache、build artifacts、生成結果は Git から除外し、`outputs/SPEC.md` は追跡する。
 
-仕様と実装手順は [仕様書](outputs/SPEC.md)、第一工程の API と I/O の設計は [インフラ層の設計](docs/INFRASTRUCTURE.md) を参照。
+仕様と実装手順は [仕様書](outputs/SPEC.md)、第一工程の API と I/O は [インフラ層の設計](docs/INFRASTRUCTURE.md)、第二工程の操作・invariants・利用例は [ドメイン操作の設計](docs/DOMAIN.md) を参照。
