@@ -29,6 +29,8 @@
 
 `deletedTokens` は token 単位の削除リストのパス（任意）。リストは 1 行に JSON 文字列リテラルを 1 つ書く形式で（`" yang"`、`"什么"`、`"\n\n"`）、先頭の空白や改行を曖昧さなく書ける。空行と `#` で始まる行は読み飛ばし、重複行は停止条件。added token はその内容、lexical token は decoded surface との完全一致で照合し、一致した token を理由 `listed` で削除する。構造的保護や `protectedContents`・Math 保護に当たる token は残し、衝突として報告する。どの token にも一致しない行は停止条件にせず、`summary.json` の `policy.deletionList` と `deletion-list-unmatched.jsonl` に出すので、同じリストを複数のモデルに使える。リストは参照入力として SHA-256 を plan に記録し、編集すると保存済み plan の再検証が止まる。`summary.json` の `rowsAboveMultiple` は、行数を 64／128／256 の倍数に合わせるのにあと何行削ればよいかを示す。
 
+`pruneSimplifiedForms`／`pruneTraditionalForms`（既定 false）は、Unihan の `kTraditionalVariant`／`kSimplifiedVariant` で自分と別の字を持つ Han 漢字（簡体字形／繁体字・旧字体形）を、日本語参照集合の中にあっても禁止する。常用漢字と `子の名に使える漢字`（人名用、常用の異体字）は除く。Unihan は `scripts/vocab-surgery fetch-unihan` で `outputs/reference/unihan/<版>/` に取得する。版の既定は ICU4J の Unicode 版（現在 17.0.0）で、`--unicode-version` で変えられる。取得は版付きの URL から staging に行い、既知の SHA-256（17.0.0）または `--sha256` と照合してから置換なしで公開する。照合できない版は `verified=false` として記録する。既に取得済みの版は再取得しない。policy は `unihan`（省略時は ICU の版の取得先）を読み、Unihan の版が ICU と異なれば停止する。Unihan のファイルの SHA-256 は policy 入力の指紋に入る。判定した字は `han-variant-forms.jsonl` に出る。常用・人名用の外にも日本語で使う字（`痒 洒 涛 疱 佇 儘 嘔 囁` など）が含まれるので、有効にする前にこの一覧を確認する。
+
 `protectMath=true` は ICU の `Math=true` の scalar を Script／Han／明示禁止判定から除外する。Math の文字だけからなる token は `Math` 理由で BPE cleanup からも保護する。混在 token に別の禁止文字があれば削除対象になる。`false` はこの追加保護だけを無効にし、基礎 bytes・protocol・手動保護を解除しない。`α`・`λ`・`א` の数学用途は Math 属性に含まれないため、Script の選択や明示保護で扱う。
 
 policy・plan・manifest は版番号を持たない。形式が変わった後の古い成果物は移行せず、入力から作り直す。日英 coding 用の追加 profile は [PRUNING_JA_EN_CODING_V2.md](PRUNING_JA_EN_CODING_V2.md) を参照。

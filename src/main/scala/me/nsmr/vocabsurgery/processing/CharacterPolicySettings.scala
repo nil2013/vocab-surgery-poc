@@ -10,6 +10,9 @@ import me.nsmr.vocabsurgery.unicode.*
 
 /** Settings for `CharacterPolicy`. `japaneseReference` is the kanji-data directory the Japanese kanji set is built from;
   * `deletedTokens` names an optional deletion list (see `DeletionList`).
+  * `pruneSimplifiedForms` / `pruneTraditionalForms` forbid Han characters that Unihan gives a different traditional /
+  * simplified variant, except the 常用 and 人名用 characters (`子の名に使える漢字`). They read `Unihan_Variants.txt` from
+  * `unihan`, by default the `fetch-unihan` directory for ICU's Unicode version, and require that version.
   */
 final case class CharacterPolicySettings(
     japaneseReference: Path = Path.of("kanji-data"),
@@ -20,20 +23,40 @@ final case class CharacterPolicySettings(
     protectedIds: Set[OriginalTokenId] = Set.empty,
     protectedContents: Set[String] = Set.empty,
     protectMath: Boolean = true,
-    deletedTokens: Option[Path] = None
+    deletedTokens: Option[Path] = None,
+    pruneSimplifiedForms: Boolean = false,
+    pruneTraditionalForms: Boolean = false,
+    unihan: Option[Path] = None
 ) extends PolicySettings:
   def kind: PolicyKind = CharacterPolicySettings
-  def inputs: Vector[Path] = japaneseReference +: deletedTokens.toVector
-  def resolved: CharacterPolicySettings = copy(japaneseReference = japaneseReference.toRealPath(), deletedTokens = deletedTokens.map(_.toRealPath()))
+  private def usesUnihan: Boolean = pruneSimplifiedForms || pruneTraditionalForms
+  private def unihanDirectory: Path = unihan.getOrElse(UnihanFetch.directory(Path.of("outputs"), UnicodeData.unicodeVersion))
+  def inputs: Vector[Path] = (japaneseReference +: deletedTokens.toVector) ++ Option.when(usesUnihan)(unihanDirectory)
+  def resolved: CharacterPolicySettings = copy(japaneseReference = japaneseReference.toRealPath(), deletedTokens = deletedTokens.map(_.toRealPath()),
+    unihan = if usesUnihan then Some(CharacterPolicySettings.existing(unihanDirectory).toRealPath()) else unihan)
 
-  def domain(reference: JapaneseKanjiReference, deleted: Set[String] = Set.empty): CharacterPolicy =
-    CharacterPolicy(reference, forbiddenScripts, pruneHanOutsideReference, explicitForbidden, protectedIds, protectedContents, protectMath, deleted)
+  def domain(reference: JapaneseKanjiReference, deleted: Set[String] = Set.empty, simplified: Set[CodePoint] = Set.empty,
+      traditional: Set[CodePoint] = Set.empty): CharacterPolicy =
+    CharacterPolicy(reference, forbiddenScripts, pruneHanOutsideReference, explicitForbidden, protectedIds, protectedContents, protectMath,
+      deleted, simplified, traditional)
 
   def load(): LoadedPolicy =
     val data = KanjiLoader.load(japaneseReference)
     val deleted = deletedTokens.map(DeletionList.read).getOrElse(Vector.empty)
-    CharacterPolicySettings.Loaded(domain(JapaneseKanjiReference.from(data, japaneseExtra), deleted.toSet), data,
-      ProcessingIO.revision(japaneseReference), deletedTokens.map(FileIO.sha256(_)))
+    val variants = Option.when(usesUnihan) {
+      val file = CharacterPolicySettings.existing(unihanDirectory).resolve(UnihanLoader.FileName)
+      val loaded = UnihanLoader.load(file)
+      Diagnostics.check(loaded.unicodeVersion == UnicodeData.unicodeVersion, file, "header",
+        s"Unihan is Unicode ${loaded.unicodeVersion} but ICU is ${UnicodeData.unicodeVersion}")
+      (loaded, FileIO.sha256(file))
+    }
+    // Daily Japanese: 常用 forms and everything in 子の名に使える漢字 (人名用 and the 常用 variants).
+    val japaneseCore = data.common.records.map(_.character).toSet ++ data.names.records.map(_.character) ++ data.commonTable.records.map(_.commonForm)
+    def forms(enabled: Boolean, select: UnihanVariants => Set[CodePoint]) =
+      variants.filter(_ => enabled).map((v, _) => select(v) -- japaneseCore).getOrElse(Set.empty)
+    CharacterPolicySettings.Loaded(domain(JapaneseKanjiReference.from(data, japaneseExtra), deleted.toSet,
+      forms(pruneSimplifiedForms, _.simplifiedForms), forms(pruneTraditionalForms, _.traditionalForms)), data,
+      ProcessingIO.revision(japaneseReference), deletedTokens.map(FileIO.sha256(_)), variants.map((v, hash) => v.unicodeVersion -> hash))
 
   def json: Json = Json.obj(
     "japaneseReference" -> Json.fromString(japaneseReference.toString),
@@ -47,13 +70,16 @@ final case class CharacterPolicySettings(
     "unregisteredRows" -> Json.fromString("drop"),
     "protectMath" -> Json.fromBoolean(protectMath))
     .mapObject(fields => deletedTokens.fold(fields)(path => fields.add("deletedTokens", Json.fromString(path.toString))))
+    .mapObject(_.add("pruneSimplifiedForms", Json.fromBoolean(pruneSimplifiedForms)).add("pruneTraditionalForms", Json.fromBoolean(pruneTraditionalForms)))
+    .mapObject(fields => unihan.fold(fields)(path => fields.add("unihan", Json.fromString(path.toString))))
 
 object CharacterPolicySettings extends PolicyKind:
   val name = "characters"
 
   def parse(fields: JsonObject, path: Path): CharacterPolicySettings =
     val names = Set("japaneseReference", "unicodeVersion", "forbiddenScripts", "pruneHanOutsideReference", "japaneseExtra",
-      "explicitForbidden", "protectedIds", "protectedContents", "unregisteredRows", "protectMath", "deletedTokens")
+      "explicitForbidden", "protectedIds", "protectedContents", "unregisteredRows", "protectMath", "deletedTokens",
+      "pruneSimplifiedForms", "pruneTraditionalForms", "unihan")
     fields.keys.find(!names(_)).foreach(name => Diagnostics.invalid(path, name, "unknown policy field"))
     fields("unicodeVersion").foreach(v => Diagnostics.check(JsonFields.text(v, path, "unicodeVersion") == UnicodeData.provenance.unicodeVersion, path, "unicodeVersion", "Unicode version does not match pinned provider"))
     fields("unregisteredRows").foreach(v => Diagnostics.check(JsonFields.text(v, path, "unregisteredRows") == "drop", path, "unregisteredRows", "only drop is supported"))
@@ -67,9 +93,18 @@ object CharacterPolicySettings extends PolicyKind:
       flag("pruneHanOutsideReference"), points("japaneseExtra"), points("explicitForbidden"),
       array("protectedIds").getOrElse(Vector.empty).map(v => OriginalTokenId(JsonFields.int(v, path, "protectedIds"))).toSet,
       array("protectedContents").getOrElse(Vector.empty).map(v => JsonFields.text(v, path, "protectedContents")).toSet,
-      flag("protectMath"), fields("deletedTokens").map(v => Path.of(JsonFields.text(v, path, "deletedTokens"))))
+      flag("protectMath"), fields("deletedTokens").map(v => Path.of(JsonFields.text(v, path, "deletedTokens"))),
+      fields("pruneSimplifiedForms").exists(JsonFields.bool(_, path, "pruneSimplifiedForms")),
+      fields("pruneTraditionalForms").exists(JsonFields.bool(_, path, "pruneTraditionalForms")),
+      fields("unihan").map(v => Path.of(JsonFields.text(v, path, "unihan"))))
 
-  private final case class Loaded(policy: CharacterPolicy, data: KanjiData, revision: Option[String], deletedTokensSha256: Option[String]) extends LoadedPolicy:
+  /** A missing reference directory names the command that creates it. */
+  private def existing(directory: Path): Path =
+    Diagnostics.check(java.nio.file.Files.isDirectory(directory), directory, "unihan", "missing; run scripts/vocab-surgery fetch-unihan")
+    directory
+
+  private final case class Loaded(policy: CharacterPolicy, data: KanjiData, revision: Option[String], deletedTokensSha256: Option[String],
+      unihan: Option[(String, String)]) extends LoadedPolicy:
     private val reference = policy.japanese
     private def hashes: Json = Json.obj(reference.sourceHashes.toVector.sortBy(_._1).map((name, hash) => name -> Json.fromString(hash))*)
     private def outsideReference(token: TokenAnalysis): Vector[PolicyReason] = token.deletion.filter(_.code == ForbiddenReason.HanOutsideJapaneseReference.code)
@@ -79,6 +114,11 @@ object CharacterPolicySettings extends PolicyKind:
         "unicodeVersion" -> Json.fromString(reference.unicode.unicodeVersion)),
       "hanDefinition" -> Json.fromString("Script=Han && General_Category=Lo"))
       .mapObject(fields => deletedTokensSha256.fold(fields)(hash => fields.add("deletedTokensSha256", Json.fromString(hash))))
+      .mapObject(fields => unihan.fold(fields)((version, hash) => fields.add("unihan", Json.obj("unicodeVersion" -> Json.fromString(version),
+        "variantsSha256" -> Json.fromString(hash)))))
+
+    private def variantTokens(analysis: VocabularyAnalysis, reason: ForbiddenReason): Int =
+      analysis.tokens.count(_.deletion.exists(_.code == reason.code))
 
     private def unmatched(analysis: VocabularyAnalysis): Vector[String] =
       policy.unmatchedDeletions(analysis.tokens.map(t => TokenCandidate(t.id, t.content, t.surface, t.decoded, t.protection(ProtectionReason.AddedToken))))
@@ -88,6 +128,10 @@ object CharacterPolicySettings extends PolicyKind:
       val candidates = analysis.tokens.filter(outsideReference(_).nonEmpty)
       val missing = unmatched(analysis)
       Json.obj("hanCandidates" -> Json.fromInt(candidates.size), "hanExamples" -> Json.fromValues(candidates.take(10).flatMap(_.surface).map(s => Json.fromString(s.text))),
+        "simplifiedForms" -> Json.obj("characters" -> Json.fromInt(policy.simplifiedForms.size),
+          "tokens" -> Json.fromInt(variantTokens(analysis, ForbiddenReason.SimplifiedForm))),
+        "traditionalForms" -> Json.obj("characters" -> Json.fromInt(policy.traditionalForms.size),
+          "tokens" -> Json.fromInt(variantTokens(analysis, ForbiddenReason.TraditionalForm))),
         "deletionList" -> Json.obj("entries" -> Json.fromInt(policy.deletedContents.size), "matchedTokens" -> Json.fromInt(listed(analysis).size),
           "keptByProtection" -> Json.fromInt(listed(analysis).count(_.protectedToken)), "unmatchedEntries" -> Json.fromInt(missing.size),
           "unmatchedExamples" -> Json.fromValues(missing.take(10).map(Json.fromString))))
@@ -113,5 +157,10 @@ object CharacterPolicySettings extends PolicyKind:
       ProcessingIO.lines(directory.resolve("han-pruning-candidates.jsonl"), analysis.tokens.iterator.filter(outsideReference(_).nonEmpty).map(t => Json.obj(
         "originalId" -> Json.fromInt(t.id.intValue), "surface" -> t.surface.fold(Json.Null)(s => Json.fromString(s.text)), "protected" -> Json.fromBoolean(t.protectedToken),
         "codePoints" -> Json.fromValues(outsideReference(t).flatMap(_.character).map(cp => Json.fromInt(cp.intValue))))))
+      val forms = policy.simplifiedForms.toVector.map(_ -> "simplified") ++ policy.traditionalForms.toVector.map(_ -> "traditional")
+      ProcessingIO.lines(directory.resolve("han-variant-forms.jsonl"), forms.sortBy(_._1.intValue).iterator.map { (cp, kind) =>
+        Json.obj("codePoint" -> Json.fromInt(cp.intValue), "glyph" -> Json.fromString(cp.text), "form" -> Json.fromString(kind),
+          "inJapaneseReference" -> Json.fromBoolean(reference.contains(cp)))
+      })
       ProcessingIO.lines(directory.resolve("deletion-list-unmatched.jsonl"), unmatched(analysis).iterator.map(Json.fromString))
       ProcessingIO.lines(directory.resolve("kanji-missing-texts.jsonl"), data.glyphDiagnostics.iterator.map(d => Json.obj("record" -> Json.fromLong(d.recordNumber), "rawText" -> Json.fromString(d.rawText), "reason" -> Json.fromString(d.reason))))

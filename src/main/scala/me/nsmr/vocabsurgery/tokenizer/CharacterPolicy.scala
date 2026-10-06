@@ -6,10 +6,12 @@ import me.nsmr.vocabsurgery.unicode.*
 
 enum ForbiddenReason:
   case Script(script: UnicodeScript)
-  case HanOutsideJapaneseReference, Explicit
+  case HanOutsideJapaneseReference, SimplifiedForm, TraditionalForm, Explicit
   def code: String = this match
     case Script(script) => s"script_${script.name.toLowerCase(java.util.Locale.ROOT)}"
     case HanOutsideJapaneseReference => "han_outside_japanese_reference"
+    case SimplifiedForm => "han_simplified_form"
+    case TraditionalForm => "han_traditional_form"
     case Explicit => "explicit"
 
 final case class ForbiddenCharacter(character: CodePoint, reasons: Set[ForbiddenReason])
@@ -19,6 +21,8 @@ final case class ForbiddenCharacter(character: CodePoint, reasons: Set[Forbidden
   * `protectedIds` and `protectedContents` (encoded key, added-token text or decoded surface) are kept as well.
   * `deletedContents` deletes tokens whose decoded surface (added-token text for added tokens) equals an entry;
   * entries matching no token are not an error, so one list can serve several models.
+  * `simplifiedForms` and `traditionalForms` forbid Han characters even inside the Japanese reference; the settings
+  * build them from Unihan, leaving out the characters Japanese uses daily.
   */
 final case class CharacterPolicy(
     japanese: JapaneseKanjiReference,
@@ -28,7 +32,9 @@ final case class CharacterPolicy(
     protectedIds: Set[OriginalTokenId] = Set.empty,
     protectedContents: Set[String] = Set.empty,
     protectMath: Boolean = true,
-    deletedContents: Set[String] = Set.empty
+    deletedContents: Set[String] = Set.empty,
+    simplifiedForms: Set[CodePoint] = Set.empty,
+    traditionalForms: Set[CodePoint] = Set.empty
 ) extends PruningPolicy with CharacterRule:
   val name = "characters"
   override def characterRule: Option[CharacterRule] = Some(this)
@@ -40,6 +46,8 @@ final case class CharacterPolicy(
     val reasons = Set.newBuilder[ForbiddenReason]
     if forbiddenScripts(script) then reasons += ForbiddenReason.Script(script)
     if pruneHanOutsideReference && UnicodeData.isHanKanji(cp) && !japanese.contains(cp) then reasons += ForbiddenReason.HanOutsideJapaneseReference
+    if simplifiedForms(cp) then reasons += ForbiddenReason.SimplifiedForm
+    if traditionalForms(cp) then reasons += ForbiddenReason.TraditionalForm
     if explicitForbidden(cp) then reasons += ForbiddenReason.Explicit
     val result = reasons.result()
     if result.isEmpty then None else Some(ForbiddenCharacter(cp, result))

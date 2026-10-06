@@ -93,6 +93,69 @@ class ProcessingSuite extends munit.FunSuite:
     }
   }
 
+  private def unihanFile(directory: Path, version: String = me.nsmr.vocabsurgery.unicode.UnicodeData.unicodeVersion): Path =
+    val file = directory.resolve("Unihan_Variants.txt")
+    // 日 has no variant; 发 is a simplified form of 發; 發 a traditional form; 国 (常用) has the traditional variant 國.
+    Files.writeString(file, s"# Unihan_Variants.txt\n# Unicode Version $version\n#\nU+56FD\tkTraditionalVariant\tU+570B\n" +
+      "U+53D1\tkTraditionalVariant\tU+50AA U+767C\nU+767C\tkSimplifiedVariant\tU+53D1\nU+767C\tkSemanticVariant\tU+50AA<kMatthews\n")
+    file
+
+  test("Unihan loader keeps simplified and traditional variants and reads the Unicode version") {
+    val directory = Files.createTempDirectory("vocab-unihan-")
+    try
+      val variants = me.nsmr.vocabsurgery.unicode.UnihanLoader.load(unihanFile(directory))
+      assertEquals(variants.simplifiedForms, Set(CodePoint(0x53d1), CodePoint(0x56fd)))
+      assertEquals(variants.traditionalForms, Set(CodePoint(0x767c)))
+      Files.writeString(directory.resolve("Unihan_Variants.txt"), "U+53D1\tkTraditionalVariant\tU+767C\n")
+      intercept[DataException](me.nsmr.vocabsurgery.unicode.UnihanLoader.load(directory.resolve("Unihan_Variants.txt")))
+    finally Using.resource(Files.walk(directory))(_.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.foreach(Files.delete))
+  }
+
+  test("fetch-unihan stages, checks the digest, extracts only the variants and never replaces a fetched version") {
+    ProcessingFixtures.withModel { (directory, _, output) =>
+      val zip = directory.resolve("Unihan.zip")
+      Using.resource(java.util.zip.ZipOutputStream(Files.newOutputStream(zip))) { out =>
+        out.putNextEntry(java.util.zip.ZipEntry("Unihan_Variants.txt"))
+        out.write(Files.readAllBytes(unihanFile(Files.createDirectory(directory.resolve("src")))))
+        out.closeEntry()
+      }
+      val hash = FileIO.sha256(zip)
+      var opened = 0
+      val open: UnihanFetch.Opener = _ => { opened += 1; Files.newInputStream(zip) }
+      val options = ProcessingOptions(outputRoot = output)
+      intercept[DataException](UnihanFetch.fetch("17.0.0", Some("0" * 64), options, open))
+      assert(!Files.exists(UnihanFetch.directory(output, "17.0.0")))
+      val result = UnihanFetch.fetch("17.0.0", Some(hash), options, open)
+      assertEquals(result.hcursor.get[Boolean]("verified"), Right(true))
+      val fetched = UnihanFetch.directory(output, "17.0.0")
+      assertEquals(InputInventory.files(fetched).map(_.getFileName.toString), Vector("Unihan_Variants.txt", "source.json"))
+      assertEquals(UnihanFetch.fetch("17.0.0", None, options, open).hcursor.get[Boolean]("alreadyPresent"), Right(true))
+      assertEquals(opened, 2)
+      intercept[DataException](UnihanFetch.fetch("18.0.0", Some(hash), options, open))
+      assert(!Files.exists(UnihanFetch.directory(output, "18.0.0")))
+    }
+  }
+
+  test("variant-form switches forbid Unihan forms outside daily Japanese and need Unihan of ICU's version") {
+    ProcessingFixtures.withModel { (directory, input, output) =>
+      val unihan = Files.createDirectory(directory.resolve("unihan"))
+      unihanFile(unihan)
+      val settings = CharacterPolicySettings(pruneSimplifiedForms = true, pruneTraditionalForms = true, unihan = Some(unihan))
+      assertEquals(PolicyFile.parse(PolicyFile(settings).json, Path.of("p.json")), PolicyFile(settings))
+      val policy = PolicyFile(settings).resolved.settings.load().policy.asInstanceOf[me.nsmr.vocabsurgery.tokenizer.CharacterPolicy]
+      assertEquals(policy.simplifiedForms, Set(CodePoint(0x53d1)))
+      assertEquals(policy.traditionalForms, Set(CodePoint(0x767c)))
+      assertEquals(policy.forbidden(CodePoint(0x53d1)).map(_.reasons.map(_.code)), Some(Set("han_simplified_form", "han_outside_japanese_reference")))
+      assertEquals(policy.forbidden(CodePoint(0x56fd)), None)
+      val path = CheckpointProcessor.plan(input, PolicyFile(settings), output.resolve("runs/variants"), ProcessingOptions(outputRoot = output))
+      assert(Files.readString(path.getParent.resolve("han-variant-forms.jsonl")).contains("\"form\":\"traditional\""))
+      unihanFile(Files.createDirectory(directory.resolve("other")), "18.0.0")
+      intercept[DataException](PolicyFile(settings.copy(unihan = Some(directory.resolve("other")))).resolved.settings.load())
+      intercept[DataException](PolicyFile(settings.copy(unihan = Some(directory.resolve("absent")))).resolved)
+      assertEquals(PolicyFile(CharacterPolicySettings(unihan = Some(directory.resolve("absent")))).resolved.settings.inputs.size, 1)
+    }
+  }
+
   test("saved plan creates analysis artifacts and verifies input identity and deterministic operations") {
     ProcessingFixtures.withModel { (_, input, output) =>
       val options = ProcessingOptions(outputRoot = output)
