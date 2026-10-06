@@ -131,6 +131,25 @@ object CheckpointProcessor:
           catch case NonFatal(_) => ()
         throw error
 
+  /** Write `ids` (whitespace-separated source token IDs) as the published model's IDs, one per line, to a new file.
+    * The plan behind the manifest is recomputed first, so the projection is the one the model was built with.
+    */
+  def translateIds(manifestPath: Path, ids: Path, output: Path, options: ProcessingOptions = ProcessingOptions()): Json =
+    val manifest = JsonIO.read(manifestPath)
+    val prepared = PlanStore.loadVerified(Path.of(JsonFields.text(JsonFields.field(manifest, "plan", manifestPath, "manifest"), manifestPath, "plan")))
+    val listed = FileIO.readUtf8(ids).split("\\s+").toVector.filter(_.nonEmpty).zipWithIndex.map { (text, index) =>
+      val id = text.toIntOption.filter(_ >= 0).getOrElse(Diagnostics.invalid(ids, s"entry $index", s"expected a nonnegative token ID, found $text"))
+      Diagnostics.check(id < prepared.domain.projection.originalSize, ids, s"entry $index", s"ID $id exceeds the source vocabulary")
+      OriginalTokenId(id)
+    }
+    Diagnostics.check(listed.nonEmpty, ids, "IDs", "no token IDs")
+    val result = prepared.domain.projection.translate(listed)
+    val target = ProcessingIO.outputPath(options.outputRoot, output, Vector(prepared.source.directory, prepared.kanjiDirectory))
+    Files.createDirectories(target.getParent)
+    FileIO.writeNewUtf8(target, result.kept.map(_.intValue).mkString("", "\n", "\n"))
+    Json.obj("output" -> Json.fromString(target.toString), "listed" -> Json.fromInt(listed.distinct.size), "kept" -> Json.fromInt(result.kept.size),
+      "dropped" -> Json.fromValues(result.dropped.map(id => Json.fromInt(id.intValue))))
+
   /** Revalidate source identity, all manifest hashes and complete tensor byte correspondence. */
   def verifyManifest(manifestPath: Path, referenceValidator: ReferenceValidator,
       options: ProcessingOptions = ProcessingOptions()): VerificationResult =

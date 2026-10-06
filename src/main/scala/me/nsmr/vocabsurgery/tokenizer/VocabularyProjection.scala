@@ -3,6 +3,9 @@ package me.nsmr.vocabsurgery.tokenizer
 import io.circe.Json
 import me.nsmr.vocabsurgery.core.*
 
+/** Source IDs of a list split into the ones kept, as compact IDs in ascending order, and the ones pruned. */
+final case class IdTranslation(kept: Vector[CompactTokenId], dropped: Vector[OriginalTokenId])
+
 /** A checked bijection on surviving rows. Unregistered and deleted rows map to None. */
 final case class VocabularyProjection private (
     originalToCompact: Vector[Option[CompactTokenId]],
@@ -26,6 +29,11 @@ final case class VocabularyProjection private (
   def original(id: CompactTokenId): OriginalTokenId =
     DomainChecks.check(id.intValue < compactSize, "id-out-of-range", "compact ID", id.intValue.toString)
     compactToOriginal(id.intValue)
+  /** Carry a list of source IDs, such as a draft vocabulary, into the compact ID space. Duplicates collapse. */
+  def translate(ids: Iterable[OriginalTokenId]): IdTranslation =
+    val distinct = ids.toVector.distinct.sortBy(_.intValue)
+    val (kept, dropped) = distinct.partition(compact(_).isDefined)
+    IdTranslation(kept.map(requireCompact), dropped)
   def originalToCompactJson: Json = Json.fromValues(originalToCompact.map(_.fold(Json.Null)(id => Json.fromInt(id.intValue))))
   def compactToOriginalJson: Json = Json.fromValues(compactToOriginal.map(id => Json.fromInt(id.intValue)))
 

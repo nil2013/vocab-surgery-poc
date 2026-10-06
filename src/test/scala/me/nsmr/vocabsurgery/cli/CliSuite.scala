@@ -79,3 +79,25 @@ class CliSuite extends munit.FunSuite:
       assert(Files.isRegularFile(run.resolve("evaluation/forbidden-codepoints.json")))
     }
   }
+
+  test("translate-ids writes kept source IDs as published IDs and reports the pruned ones") {
+    ProcessingFixtures.withModel { (directory, input, output) =>
+      val options = ProcessingOptions(outputRoot = output)
+      val run = output.resolve("runs/translate")
+      val plan = CheckpointProcessor.plan(input, Path.of("kanji-data"), PolicySettings(), run, options)
+      CheckpointProcessor.applyPlan(plan, output.resolve("models/translate"), ProcessingFixtures.reference, options)
+      val projection = me.nsmr.vocabsurgery.processing.PlanStore.loadVerified(plan).domain.projection
+      val deleted = (0 until projection.originalSize).find(i => projection.compact(me.nsmr.vocabsurgery.core.OriginalTokenId(i)).isEmpty).get
+      val kept = projection.compactToOriginal.takeRight(2).map(_.intValue)
+      val ids = directory.resolve("ids.txt")
+      Files.writeString(ids, s"${kept(1)}\n$deleted ${kept(0)}\n${kept(1)}\n")
+      val args = Vector("translate-ids", "--manifest", run.resolve("manifest.json").toString, "--ids", ids.toString, "--out", output.resolve("draft/ids.txt").toString)
+      val (code, text, _) = invoke(args, options)
+      assertEquals(code, 0)
+      assert(text.contains(s"\"dropped\":[$deleted]"))
+      assertEquals(Files.readString(output.resolve("draft/ids.txt")), s"${projection.compactSize - 2}\n${projection.compactSize - 1}\n")
+      assertEquals(invoke(args, options)._1, 1)
+      Files.writeString(ids, s"${projection.originalSize}\n")
+      assertEquals(invoke(args.updated(6, output.resolve("draft/other.txt").toString), options)._1, 1)
+    }
+  }
