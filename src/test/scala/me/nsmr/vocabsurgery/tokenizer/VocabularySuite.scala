@@ -9,7 +9,7 @@ import me.nsmr.vocabsurgery.unicode.*
 
 class VocabularySuite extends munit.ScalaCheckSuite:
   private val japanese = JapaneseKanjiReference.fromCharacters(CodePoint.sequence("日本").toSet)
-  private val policy = PruningPolicy(japanese)
+  private val policy = CharacterPolicy(japanese)
   private def analyze(tokenizer: TokenizerData, rows: Int, policy: PruningPolicy): VocabularyAnalysis =
     VocabularyOperations.analyze(tokenizer, ByteLevelBpe, rows, policy, Set.empty, CoderNext.requiredTokens)
 
@@ -51,7 +51,7 @@ class VocabularySuite extends munit.ScalaCheckSuite:
     assert(pruned.projection.compact(TokenizerFixtures.id(tokenizer, "<tool_call>")).isDefined)
     val literalSurface = analyze(tokenizer, TokenizerFixtures.rows(tokenizer), policy.copy(protectedContents = Set("ع")))
     assert(literalSurface.projection.compact(TokenizerFixtures.id(tokenizer, arabic)).isDefined)
-    assert(literalSurface.tokens.find(_.content == arabic).get.protection(ProtectionReason.Explicit))
+    assert(literalSurface.tokens.find(_.content == arabic).get.protection(ProtectionReason.Policy(PolicyReason("explicit"))))
   }
 
   test("Math protection overrides scalar bans, protects mathematical rows and still prunes mixed forbidden text") {
@@ -70,7 +70,7 @@ class VocabularySuite extends munit.ScalaCheckSuite:
     assertEquals(settings.forbidden(TokenSurface("个ℵ")).map(_.character), Vector(CodePoint(0x4e2a)))
     val result = analyze(tokenizer, TokenizerFixtures.rows(tokenizer), settings)
     val mathematical = result.tokens.find(_.content == math).get
-    assert(mathematical.protection(ProtectionReason.Math))
+    assert(mathematical.protection(ProtectionReason.Policy(PolicyReason("math"))))
     assert(result.projection.compact(mathematical.id).isDefined)
     assert(result.cleanup.directDeleted(TokenizerFixtures.id(tokenizer, mixed)))
     val disabled = settings.copy(protectMath = false)
@@ -78,7 +78,35 @@ class VocabularySuite extends munit.ScalaCheckSuite:
     assert(disabled.forbidden(arabicMath).nonEmpty)
     val pruned = analyze(tokenizer, TokenizerFixtures.rows(tokenizer), disabled)
     assert(pruned.cleanup.directDeleted(mathematical.id))
-    assert(!pruned.tokens.find(_.content == math).get.protection(ProtectionReason.Math))
+    assert(!pruned.tokens.find(_.content == math).get.protection(ProtectionReason.Policy(PolicyReason("math"))))
+  }
+
+  test("a programmed policy sees the whole vocabulary, while structural protection and merge cleanup still apply") {
+    val tokenizer = TokenizerFixtures.create(Vector("ab", "abc", "bc", "cd"), Vector(BpeMerge("a", "b"), BpeMerge("ab", "c"), BpeMerge("b", "c"), BpeMerge("c", "d")))
+    val rows = TokenizerFixtures.rows(tokenizer)
+    def id(key: String) = TokenizerFixtures.id(tokenizer, key)
+    /** Keep only the `budget` longest multi-byte lexical tokens; a global rule no per-character predicate can express. */
+    final case class LongestTokens(budget: Int, pinned: Set[String]) extends PruningPolicy:
+      val name = "longest"
+      def decide(tokens: Vector[TokenCandidate]): Map[OriginalTokenId, PolicyDecision] =
+        val lexical = tokens.filter(t => !t.added && t.decoded.exists(_.bytes.size > 1)).sortBy(t => (-t.content.length, t.id.intValue))
+        val dropped = lexical.drop(budget).map(t => t.id -> PolicyDecision(delete = Vector(PolicyReason("over-budget"))))
+        val kept = tokens.filter(t => pinned(t.content)).map(t => t.id -> PolicyDecision(keep = Vector(PolicyReason("pinned"))))
+        (dropped ++ kept).groupMapReduce(_._1)(_._2)((a, b) => PolicyDecision(a.delete ++ b.delete, a.keep ++ b.keep))
+    val result = analyze(tokenizer, rows, LongestTokens(budget = 1, pinned = Set("cd")))
+    assertEquals(result.cleanup.directDeleted, Set(id("ab"), id("bc")))
+    assertEquals(result.cleanup.indirectDeleted, Set(id("abc")))
+    assert(result.projection.compact(id("abc")).isEmpty, "abc needs the deleted ab, so cleanup removes it")
+    assert(result.projection.compact(id("cd")).isDefined)
+    assertEquals(result.protectedConflicts.map(_.id), Vector(id("cd")))
+    assert(result.tokens.find(_.id == id("cd")).get.protection(ProtectionReason.Policy(PolicyReason("pinned"))))
+    assert(tokenizer.addedTokens.forall(t => result.projection.compact(t.id).isDefined))
+    assertEquals(result.tokens.count(_.protection(ProtectionReason.BaseToken)), 256)
+    val rogue = new PruningPolicy:
+      val name = "rogue"
+      def decide(tokens: Vector[TokenCandidate]) = Map(OriginalTokenId(rows + 5) -> PolicyDecision(delete = Vector(PolicyReason("x"))))
+    intercept[DomainException](analyze(tokenizer, rows + 10, rogue))
+    assertEquals(rogue.characterRule, None)
   }
 
   test("analysis diagnoses missing protocol, byte alphabet, unknown protection and inconsistent token identities") {

@@ -4,26 +4,26 @@ import io.circe.Json
 import java.nio.file.Path
 import me.nsmr.vocabsurgery.core.*
 import me.nsmr.vocabsurgery.io.*
-import me.nsmr.vocabsurgery.kanji.*
 import me.nsmr.vocabsurgery.model.*
 
-final case class PreparedPlan(source: ModelSnapshot, domain: ModelUpdatePlan, settings: PolicySettings,
-    kanjiDirectory: Path, kanjiRevision: Option[String], inputs: Vector[InputFile]):
+/** `policy` has real reference paths; `loadedPolicy` is what they produced. */
+final case class PreparedPlan(source: ModelSnapshot, domain: ModelUpdatePlan, policy: PolicyFile, loadedPolicy: LoadedPolicy, inputs: Vector[InputFile]):
   def description: Json = PlanStore.describe(domain)
-  def json: Json = Json.obj("source" -> Json.fromString(source.directory.toString), "kanjiDirectory" -> Json.fromString(kanjiDirectory.toString),
-    "kanjiRevision" -> kanjiRevision.fold(Json.Null)(Json.fromString), "policy" -> settings.json,
-    "kanjiSourceHashes" -> Json.obj(domain.policy.japanese.sourceHashes.toVector.sortBy(_._1).map((name, hash) => name -> Json.fromString(hash))*),
-    "inputs" -> Json.fromValues(inputs.map(_.json)), "domain" -> description, "domainSha256" -> Json.fromString(ProcessingIO.signature(description)))
+  /** Directories outputs must not overlap: the checkpoint and every policy input. */
+  def protectedRoots: Vector[Path] = source.directory +: policy.settings.inputs
+  def json: Json = Json.obj("source" -> Json.fromString(source.directory.toString), "policy" -> policy.json,
+    "policyInputs" -> loadedPolicy.fingerprint, "inputs" -> Json.fromValues(inputs.map(_.json)), "domain" -> description,
+    "domainSha256" -> Json.fromString(ProcessingIO.signature(description)))
 
 /** Saved plans are validated by recomputation, never executed as arbitrary serialized byte ranges. */
 object PlanStore:
   /** Load metadata, fingerprint input structure and compute domain operations without reading tensor payloads. */
-  def prepare(source: Path, kanjiDirectory: Path, settings: PolicySettings): PreparedPlan =
+  def prepare(source: Path, policy: PolicyFile): PreparedPlan =
     val model = SnapshotLoader.load(source.toRealPath())
-    val referencePath = kanjiDirectory.toRealPath()
-    val japanese = JapaneseKanjiReference.from(KanjiLoader.load(referencePath), settings.japaneseExtra)
-    val domain = ModelOperations.plan(model, settings.domain(japanese), settings.parameterCount)
-    PreparedPlan(model, domain, settings, referencePath, ProcessingIO.revision(referencePath), InputInventory.capture(model))
+    val resolved = policy.resolved
+    val loaded = resolved.settings.load()
+    val domain = ModelOperations.plan(model, loaded.policy, resolved.parameterCount)
+    PreparedPlan(model, domain, resolved, loaded, InputInventory.capture(model))
 
   /** Recompute operations from current inputs and reject any inventory, reference or saved-plan mismatch. */
   def loadVerified(path: Path): PreparedPlan =
@@ -31,12 +31,9 @@ object PlanStore:
     def field(name: String) = JsonFields.field(json, name, path, "plan")
     val expectedInputs = InputInventory.parse(field("inputs"), path)
     val source = Path.of(JsonFields.text(field("source"), path, "source"))
-    val kanji = Path.of(JsonFields.text(field("kanjiDirectory"), path, "kanjiDirectory"))
-    val settings = PolicySettings.parse(field("policy"), path)
-    val current = prepare(source, kanji, settings)
+    val current = prepare(source, PolicyFile.parse(field("policy"), path))
     Diagnostics.check(current.inputs == expectedInputs, path, "inputs", "source files changed since planning")
-    Diagnostics.check(current.json.hcursor.downField("kanjiRevision").focus == json.hcursor.downField("kanjiRevision").focus &&
-      current.json.hcursor.downField("kanjiSourceHashes").focus.contains(field("kanjiSourceHashes")), path, "kanji reference", "kanji input changed since planning")
+    Diagnostics.check(current.loadedPolicy.fingerprint == field("policyInputs"), path, "policyInputs", "policy inputs changed since planning")
     val expected = field("domain")
     Diagnostics.check(ProcessingIO.signature(expected) == JsonFields.text(field("domainSha256"), path, "domainSha256"), path, "domainSha256", "saved plan digest mismatch")
     Diagnostics.check(current.description == expected, path, "domain", "saved plan differs from recomputed operations")

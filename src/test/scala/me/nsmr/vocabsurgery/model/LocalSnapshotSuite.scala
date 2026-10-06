@@ -5,7 +5,6 @@ import java.nio.file.{Files, Path}
 import java.util.concurrent.TimeUnit
 import scala.util.Using
 import me.nsmr.vocabsurgery.core.*
-import me.nsmr.vocabsurgery.kanji.{JapaneseKanjiReference, KanjiLoader}
 import me.nsmr.vocabsurgery.tokenizer.*
 import me.nsmr.vocabsurgery.io.{FileIO, JsonIO}
 import me.nsmr.vocabsurgery.unicode.UnicodeData
@@ -22,10 +21,9 @@ class LocalSnapshotSuite extends munit.FunSuite:
     val registered = (snapshot.tokenizer.vocabulary.map(_.id) ++ snapshot.tokenizer.addedTokens.map(_.id)).toSet
     println(s"Inspected ${family.name}: ${snapshot.shards.size} shards / ${snapshot.shards.map(_.tensors.size).sum} tensors, " +
       s"${snapshot.config.vocabSize} rows, ${registered.size} registered IDs, without loading payloads")
-    val japanese = JapaneseKanjiReference.from(KanjiLoader.load(Path.of("kanji-data")))
     val policyPath = sys.props.getOrElse("vocabSurgery.policy", "policies/ja-en-coding-v2.json")
-    val settings = me.nsmr.vocabsurgery.processing.PolicySettings.load(Path.of(policyPath))
-    val plan = ModelOperations.plan(snapshot, settings.domain(japanese))
+    val loaded = me.nsmr.vocabsurgery.processing.PolicyFile.load(Path.of(policyPath)).settings.load()
+    val plan = ModelOperations.plan(snapshot, loaded.policy)
     assertEquals(plan.analysis.unregisteredIds.size, snapshot.config.vocabSize - registered.size)
     assertEquals(plan.analysis.tokens.count(_.protection(ProtectionReason.BaseToken)), family.tokenizer.baseKeys.size)
     assert(plan.analysis.protectedConflicts.forall(token => plan.projection.compact(token.id).isDefined))
@@ -44,18 +42,18 @@ class LocalSnapshotSuite extends munit.FunSuite:
     println(s"Planned ${family.name} K=${plan.projection.compactSize}, direct=${plan.analysis.cleanup.directDeleted.size}, " +
       s"indirect=${plan.analysis.cleanup.indirectDeleted.size}, saved=${plan.savedPayloadBytes.longValue} bytes, files=${plan.outputFiles.map(_.name).mkString(",")}")
     sys.props.get("vocabSurgery.tokenizersPython") match
-      case Some(python) => checkReferenceTokenizer(python, snapshot, plan, japanese)
+      case Some(python) => checkReferenceTokenizer(python, snapshot, plan, loaded.policy.normalizationSamples)
       case None => println("Reference tokenizers / NFC comparison not enabled; set vocabSurgery.tokenizersPython to opt in")
   }
 
-  private def checkReferenceTokenizer(python: String, source: ModelSnapshot, plan: ModelUpdatePlan, japanese: JapaneseKanjiReference): Unit =
+  private def checkReferenceTokenizer(python: String, source: ModelSnapshot, plan: ModelUpdatePlan, samples: Vector[CodePoint]): Unit =
     val directory = Files.createTempDirectory("vocab-domain-oracle-")
     try
       val tokenizerPath = directory.resolve("tokenizer.json")
       JsonIO.writeNew(tokenizerPath, plan.json("tokenizer.json"))
       val loaded = TokenizerLoader.load(tokenizerPath)
       assertEquals((loaded.vocabulary.map(_.id.intValue) ++ loaded.addedTokens.map(_.id.intValue)).toSet, (0 until plan.projection.compactSize).toSet)
-      val nfc = Json.fromValues(japanese.sortedCharacters.map(cp => Json.arr(Json.fromString(cp.text), Json.fromString(UnicodeData.normalize(TokenSurface(cp.text)).text))))
+      val nfc = Json.fromValues(samples.map(cp => Json.arr(Json.fromString(cp.text), Json.fromString(UnicodeData.normalize(TokenSurface(cp.text)).text))))
       val nfcPath = directory.resolve("nfc.json")
       JsonIO.writeNew(nfcPath, nfc)
       val script = """

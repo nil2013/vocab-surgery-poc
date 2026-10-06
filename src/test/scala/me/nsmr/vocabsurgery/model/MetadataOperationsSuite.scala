@@ -101,7 +101,7 @@ class MetadataOperationsSuite extends munit.FunSuite:
     val original = source.original.mapObject(_.add("future", Json.obj("large" -> Json.fromLong(9007199254740993L))))
       .mapObject(fields => fields.add("model", fields("model").get.mapObject(_.add("merges", strings))))
     val tokenizer = source.copy(original = original)
-    val policy = PruningPolicy(JapaneseKanjiReference.fromCharacters(Set(CodePoint('日'.toInt))), explicitForbidden = Set(CodePoint('b'.toInt)), protectedContents = Set("ab"))
+    val policy = CharacterPolicy(JapaneseKanjiReference.fromCharacters(Set(CodePoint('日'.toInt))), explicitForbidden = Set(CodePoint('b'.toInt)), protectedContents = Set("ab"))
     val analysis = VocabularyOperations.analyze(tokenizer, ByteLevelBpe, TokenizerFixtures.rows(tokenizer) + 2, policy, Set.empty, CoderNext.requiredTokens)
     val result = TokenizerRewrite(tokenizer, analysis)
     assertEquals(result.hcursor.downField("future").focus, original.hcursor.downField("future").focus)

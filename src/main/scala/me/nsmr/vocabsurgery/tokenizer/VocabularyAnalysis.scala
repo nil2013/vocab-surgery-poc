@@ -1,45 +1,14 @@
 package me.nsmr.vocabsurgery.tokenizer
 
 import me.nsmr.vocabsurgery.core.*
-import me.nsmr.vocabsurgery.kanji.JapaneseKanjiReference
 import me.nsmr.vocabsurgery.model.TokenizerData
-import me.nsmr.vocabsurgery.unicode.*
-
-enum ForbiddenReason:
-  case Script(script: UnicodeScript)
-  case HanOutsideJapaneseReference, Explicit
-  def code: String = this match
-    case Script(script) => s"script_${script.name.toLowerCase(java.util.Locale.ROOT)}"
-    case HanOutsideJapaneseReference => "han_outside_japanese_reference"
-    case Explicit => "explicit"
-
-final case class ForbiddenCharacter(character: CodePoint, reasons: Set[ForbiddenReason])
-
-final case class PruningPolicy(
-    japanese: JapaneseKanjiReference,
-    forbiddenScripts: Set[UnicodeScript] = Set(UnicodeScript.Arabic, UnicodeScript.Cyrillic, UnicodeScript.Hangul),
-    pruneHanOutsideReference: Boolean = true,
-    explicitForbidden: Set[CodePoint] = Set.empty,
-    protectedIds: Set[OriginalTokenId] = Set.empty,
-    protectedContents: Set[String] = Set.empty,
-    protectMath: Boolean = true
-):
-  def forbidden(surface: TokenSurface): Vector[ForbiddenCharacter] =
-    surface.codePoints.distinct.flatMap(forbidden)
-
-  /** Reuse the exact same predicate for generated-text metrics and tokenizer classification. */
-  def forbidden(cp: CodePoint): Option[ForbiddenCharacter] =
-      if protectMath && UnicodeData.isMath(cp) then return None
-      val script = UnicodeData.script(cp)
-      val reasons = Set.newBuilder[ForbiddenReason]
-      if forbiddenScripts(script) then reasons += ForbiddenReason.Script(script)
-      if pruneHanOutsideReference && UnicodeData.isHanKanji(cp) && !japanese.contains(cp) then reasons += ForbiddenReason.HanOutsideJapaneseReference
-      if explicitForbidden(cp) then reasons += ForbiddenReason.Explicit
-      val result = reasons.result()
-      if result.isEmpty then None else Some(ForbiddenCharacter(cp, result))
 
 enum ProtectionReason:
-  case BaseToken, PartialUtf8, AddedToken, RequiredReference, Explicit, Math
+  case BaseToken, PartialUtf8, AddedToken, RequiredReference
+  case Policy(reason: PolicyReason)
+  def code: String = this match
+    case Policy(reason) => s"policy_${reason.code}"
+    case other => other.toString
 
 final case class TokenAnalysis(
     id: OriginalTokenId,
@@ -47,10 +16,10 @@ final case class TokenAnalysis(
     decoded: Option[DecodedToken],
     surface: Option[TokenSurface],
     protection: Set[ProtectionReason],
-    forbidden: Vector[ForbiddenCharacter]
+    deletion: Vector[PolicyReason]
 ):
   def protectedToken: Boolean = protection.nonEmpty
-  def directDelete: Boolean = !protectedToken && forbidden.nonEmpty
+  def directDelete: Boolean = !protectedToken && deletion.nonEmpty
 
 final case class VocabularyAnalysis(
     tokens: Vector[TokenAnalysis],
@@ -59,7 +28,7 @@ final case class VocabularyAnalysis(
     unregisteredIds: Set[OriginalTokenId]
 ):
   def survivingTokens: Vector[TokenAnalysis] = tokens.filter(token => projection.compact(token.id).isDefined)
-  def protectedConflicts: Vector[TokenAnalysis] = tokens.filter(token => token.protectedToken && token.forbidden.nonEmpty)
+  def protectedConflicts: Vector[TokenAnalysis] = tokens.filter(token => token.protectedToken && token.deletion.nonEmpty)
 
 /** Classify first, then clean the DAG and construct a deterministic projection. No file access. */
 object VocabularyOperations:
@@ -85,29 +54,28 @@ object VocabularyOperations:
     DomainChecks.check(ids.forall(_.intValue < originalRows), "id-out-of-range", "analysis", "registered ID exceeds model rows")
     val byContent = graph.vocabulary ++ added.values.map(token => token.content -> token.id)
     val decodedLexical = tokenizer.vocabulary.map(token => token.id -> scheme.decode(token.encoded)).toMap
-    val bySurface = decodedLexical.toVector.flatMap((id, decoded) => decoded.surface.map(surface => surface.text -> id)).toMap
-    val explicitIds = policy.protectedContents.flatMap { content =>
-      val matched = byContent.get(content).toSet ++ bySurface.get(content).toSet
-      DomainChecks.check(matched.nonEmpty, "missing-protected-token", "analysis", content)
-      matched
-    }
     val contentIds = requiredContents.map(content => byContent.getOrElse(content,
       DomainChecks.fail("missing-protocol-token", "analysis", content)))
     val required = requiredIds ++ contentIds
-    DomainChecks.check((required ++ policy.protectedIds).subsetOf(ids), "unknown-protected-id", "analysis", "protected ID is unregistered")
-    val tokens = ids.toVector.sortBy(_.intValue).map { id =>
+    DomainChecks.check(required.subsetOf(ids), "unknown-protected-id", "analysis", "required ID is unregistered")
+    val candidates = ids.toVector.sortBy(_.intValue).map { id =>
       val lex = lexical.get(id)
       val decoded = lex.map(token => decodedLexical(token.id))
       val surface = added.get(id).map(token => TokenSurface(token.content)).orElse(decoded.flatMap(_.surface))
-      val content = lex.map(_.encoded).getOrElse(added(id).content)
+      TokenCandidate(id, lex.map(_.encoded).getOrElse(added(id).content), surface, decoded, added.contains(id))
+    }
+    val decisions = policy.decide(candidates)
+    DomainChecks.check(decisions.keySet.subsetOf(ids), "unknown-policy-token", policy.name, "policy decided on an unregistered ID")
+    val tokens = candidates.map { candidate =>
+      val id = candidate.id
+      val decision = decisions.getOrElse(id, PolicyDecision())
       val protectedBy = Set.newBuilder[ProtectionReason]
       if graph.roots(id) then protectedBy += ProtectionReason.BaseToken
-      if decoded.exists(_.surface.isEmpty) then protectedBy += ProtectionReason.PartialUtf8
-      if added.contains(id) then protectedBy += ProtectionReason.AddedToken
+      if candidate.decoded.exists(_.surface.isEmpty) then protectedBy += ProtectionReason.PartialUtf8
+      if candidate.added then protectedBy += ProtectionReason.AddedToken
       if required(id) then protectedBy += ProtectionReason.RequiredReference
-      if policy.protectedIds(id) || explicitIds(id) then protectedBy += ProtectionReason.Explicit
-      if policy.protectMath && surface.exists(_.codePoints.forall(UnicodeData.isMath)) then protectedBy += ProtectionReason.Math
-      TokenAnalysis(id, content, decoded, surface, protectedBy.result(), surface.map(policy.forbidden).getOrElse(Vector.empty))
+      decision.keep.foreach(reason => protectedBy += ProtectionReason.Policy(reason))
+      TokenAnalysis(id, candidate.content, candidate.decoded, candidate.surface, protectedBy.result(), decision.delete)
     }
     val direct = tokens.filter(_.directDelete).map(_.id).toSet
     val protectedLexical = tokens.filter(_.protectedToken).map(_.id).toSet.intersect(graph.ids)

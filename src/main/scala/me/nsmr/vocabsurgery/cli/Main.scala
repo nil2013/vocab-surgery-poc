@@ -10,7 +10,7 @@ import me.nsmr.vocabsurgery.processing.*
 
 /** Parsed CLI values; required-option and count validation belongs to the scopt command schema. */
 final case class Arguments(command: String = "", source: Path = Path.of("."), runDirectory: Path = Path.of("."),
-    kanji: Path = Path.of("kanji-data"), policy: Option[Path] = None, plan: Path = Path.of("."), modelOutput: Path = Path.of("."),
+    policy: Option[Path] = None, plan: Path = Path.of("."), modelOutput: Path = Path.of("."),
     manifest: Path = Path.of("."), python: Path = Path.of("python3"), report: Option[Path] = None, suite: Path = Path.of("."),
     url: String = "", baselineModel: String = "", prunedModel: String = "", evaluationOutput: Path = Path.of("."),
     ids: Path = Path.of("."), idsOutput: Path = Path.of("."),
@@ -33,8 +33,7 @@ object Main:
       cmd("plan").action((_, c) => c.copy(command = "plan")).text("Save a deterministic pruning plan and analysis").children(
         opt[String]("source").required().action((v, c) => c.copy(source = Path.of(v))),
         opt[String]("run-dir").required().action((v, c) => c.copy(runDirectory = Path.of(v))),
-        opt[String]("kanji-dir").action((v, c) => c.copy(kanji = Path.of(v))).text("Default: kanji-data"),
-        opt[String]("policy").action((v, c) => c.copy(policy = Some(Path.of(v)))).text("Optional policy JSON; omitted uses the initial policy")),
+        opt[String]("policy").action((v, c) => c.copy(policy = Some(Path.of(v)))).text("Policy JSON; omitted uses the default character policy with kanji-data")),
       cmd("apply").action((_, c) => c.copy(command = "apply")).text("Revalidate plan, stage, compare every tensor and publish a new model").children(
         opt[String]("plan").required().action((v, c) => c.copy(plan = Path.of(v))),
         opt[String]("model-out").required().action((v, c) => c.copy(modelOutput = Path.of(v))), python,
@@ -86,8 +85,8 @@ object Main:
           val result = config.command match
             case "inspect" => Json.obj("runDirectory" -> Json.fromString(CheckpointProcessor.inspect(config.source, config.runDirectory, runtime).toString))
             case "plan" =>
-              val settings = config.policy.fold(PolicySettings())(PolicySettings.load)
-              val path = CheckpointProcessor.plan(config.source, config.kanji, settings, config.runDirectory, runtime)
+              val policy = config.policy.fold(PolicyFile.default)(PolicyFile.load)
+              val path = CheckpointProcessor.plan(config.source, policy, config.runDirectory, runtime)
               Json.obj("plan" -> Json.fromString(path.toString), "summary" -> JsonIO.read(path.getParent.resolve("summary.json")))
             case "apply" => Json.obj("modelOutput" -> Json.fromString(CheckpointProcessor.applyPlan(config.plan, config.modelOutput, ExternalTools.reference(config.python, helpers),
               if config.copyOnly then runtime.copy(transfer = FileTransfer.copying(runtime.transfer)) else runtime).toString))
@@ -117,8 +116,10 @@ object Main:
     val model = Path.of(JsonFields.text(JsonFields.field(manifest, "modelOutput", config.manifest, "manifest"), config.manifest, "modelOutput"))
     val directory = ProcessingIO.createDirectory(options.outputRoot, config.evaluationOutput, Vector(source, model))
     val prepared = PlanStore.loadVerified(Path.of(JsonFields.text(JsonFields.field(manifest, "plan", config.manifest, "manifest"), config.manifest, "plan")))
+    val rule = prepared.domain.policy.characterRule.getOrElse(Diagnostics.invalid(config.manifest, "policy",
+      s"contamination metrics need a policy that decides by characters; ${prepared.domain.policy.name} does not"))
     val forbidden = (0 to 0x10ffff).iterator.filter(cp => cp < 0xd800 || cp > 0xdfff)
-      .flatMap(cp => prepared.domain.policy.forbidden(me.nsmr.vocabsurgery.core.CodePoint(cp)))
+      .flatMap(cp => rule.forbidden(me.nsmr.vocabsurgery.core.CodePoint(cp)))
       .map(f => Json.arr(Json.fromInt(f.character.intValue), Json.fromValues(f.reasons.toVector.map(_.code).sorted.map(Json.fromString))))
     ProcessingIO.write(directory.resolve("forbidden-codepoints.json"), Json.fromValues(forbidden.toVector))
     FileIO.copyRange(config.suite, directory.resolve("suite.jsonl"), me.nsmr.vocabsurgery.core.ByteRange(me.nsmr.vocabsurgery.core.ByteOffset(0), me.nsmr.vocabsurgery.core.ByteCount(Files.size(config.suite))))

@@ -39,10 +39,10 @@ object CheckpointProcessor:
   /** Save a recomputable plan and analysis, returning its path.
     * Accept a new run or an inspection-only run for the same source; never replace an existing plan.
     */
-  def plan(source: Path, kanji: Path, settings: PolicySettings, runDirectory: Path,
+  def plan(source: Path, policy: PolicyFile, runDirectory: Path,
       options: ProcessingOptions = ProcessingOptions()): Path =
-    val prepared = PlanStore.prepare(source, kanji, settings)
-    val protectedRoots = Vector(source, kanji)
+    val prepared = PlanStore.prepare(source, policy)
+    val protectedRoots = prepared.protectedRoots
     val target = ProcessingIO.outputPath(options.outputRoot, runDirectory, protectedRoots)
     val directory = if Files.exists(target) then
       val existing = InputInventory.files(target)
@@ -72,7 +72,7 @@ object CheckpointProcessor:
   def applyPlan(planPath: Path, modelOutput: Path, referenceValidator: ReferenceValidator,
       options: ProcessingOptions = ProcessingOptions()): Path =
     val prepared = PlanStore.loadVerified(planPath)
-    val inputs = Vector(prepared.source.directory, prepared.kanjiDirectory)
+    val inputs = prepared.protectedRoots
     val target = ProcessingIO.outputPath(options.outputRoot, modelOutput, inputs)
     val run = planPath.toAbsolutePath.normalize().getParent
     ProcessingIO.outputPath(options.outputRoot, run, inputs)
@@ -113,7 +113,7 @@ object CheckpointProcessor:
       Diagnostics.check(InputInventory.capture(prepared.source) == prepared.inputs, planPath, "inputs", "source changed while hashing")
       val manifest = Json.obj("plan" -> Json.fromString(planPath.toAbsolutePath.normalize().toString), "planSha256" -> Json.fromString(FileIO.sha256(planPath)),
         "source" -> Json.fromString(prepared.source.directory.toString), "family" -> Json.fromString(prepared.domain.family.name),
-        "modelOutput" -> Json.fromString(target.toString), "policySha256" -> Json.fromString(ProcessingIO.signature(prepared.settings.json)),
+        "modelOutput" -> Json.fromString(target.toString), "policySha256" -> Json.fromString(ProcessingIO.signature(prepared.policy.json)),
         "originalRows" -> Json.fromInt(prepared.domain.projection.originalSize), "compactRows" -> Json.fromInt(prepared.domain.projection.compactSize),
         "payloadBytes" -> Json.fromLong(prepared.domain.payloadBytes.longValue), "sourceFileHashes" -> Json.obj(inputHashes*),
         "files" -> Json.fromValues(outputFiles), "verification" -> verification.json)
@@ -144,7 +144,7 @@ object CheckpointProcessor:
     }
     Diagnostics.check(listed.nonEmpty, ids, "IDs", "no token IDs")
     val result = prepared.domain.projection.translate(listed)
-    val target = ProcessingIO.outputPath(options.outputRoot, output, Vector(prepared.source.directory, prepared.kanjiDirectory))
+    val target = ProcessingIO.outputPath(options.outputRoot, output, prepared.protectedRoots)
     Files.createDirectories(target.getParent)
     FileIO.writeNewUtf8(target, result.kept.map(_.intValue).mkString("", "\n", "\n"))
     Json.obj("output" -> Json.fromString(target.toString), "listed" -> Json.fromInt(listed.distinct.size), "kept" -> Json.fromInt(result.kept.size),
@@ -162,10 +162,10 @@ object CheckpointProcessor:
       JsonFields.int(field("originalRows"), manifestPath, "originalRows") == prepared.domain.projection.originalSize &&
       JsonFields.int(field("compactRows"), manifestPath, "compactRows") == prepared.domain.projection.compactSize &&
       JsonFields.long(field("payloadBytes"), manifestPath, "payloadBytes") == prepared.domain.payloadBytes.longValue &&
-      JsonFields.text(field("policySha256"), manifestPath, "policySha256") == ProcessingIO.signature(prepared.settings.json),
+      JsonFields.text(field("policySha256"), manifestPath, "policySha256") == ProcessingIO.signature(prepared.policy.json),
       manifestPath, "manifest", "manifest dimensions, source or policy differ from plan")
     val output = Path.of(JsonFields.text(field("modelOutput"), manifestPath, "modelOutput"))
-    ProcessingIO.outputPath(options.outputRoot, output, Vector(prepared.source.directory, prepared.kanjiDirectory))
+    ProcessingIO.outputPath(options.outputRoot, output, prepared.protectedRoots)
     val expectedInputs = JsonFields.obj(field("sourceFileHashes"), manifestPath, "sourceFileHashes")
     Diagnostics.check(expectedInputs.keys.toSet == prepared.inputs.map(_.name).toSet, manifestPath, "sourceFileHashes", "source hash set differs from plan")
     prepared.inputs.foreach { file =>

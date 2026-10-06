@@ -2,7 +2,7 @@ package me.nsmr.vocabsurgery.cli
 
 import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.file.{Files, Path}
-import me.nsmr.vocabsurgery.processing.{CheckpointProcessor, ProcessingFixtures, ProcessingOptions, PolicySettings}
+import me.nsmr.vocabsurgery.processing.{CheckpointProcessor, ProcessingFixtures, ProcessingOptions, PolicyFile}
 
 class CliSuite extends munit.FunSuite:
   private def invoke(args: Vector[String], options: ProcessingOptions = ProcessingOptions(), helpers: Path = Path.of("scripts")): (Int, String, String) =
@@ -61,7 +61,7 @@ class CliSuite extends munit.FunSuite:
     ProcessingFixtures.withModel { (directory, input, output) =>
       val options = ProcessingOptions(outputRoot = output)
       val run = output.resolve("runs/evaluate")
-      val plan = CheckpointProcessor.plan(input, Path.of("kanji-data"), PolicySettings(), run, options)
+      val plan = CheckpointProcessor.plan(input, PolicyFile.default, run, options)
       CheckpointProcessor.applyPlan(plan, output.resolve("models/evaluate"), ProcessingFixtures.reference, options)
       val helpers = directory.resolve("helpers")
       Files.createDirectory(helpers)
@@ -84,7 +84,7 @@ class CliSuite extends munit.FunSuite:
     ProcessingFixtures.withModel { (directory, input, output) =>
       val options = ProcessingOptions(outputRoot = output)
       val run = output.resolve("runs/translate")
-      val plan = CheckpointProcessor.plan(input, Path.of("kanji-data"), PolicySettings(), run, options)
+      val plan = CheckpointProcessor.plan(input, PolicyFile.default, run, options)
       CheckpointProcessor.applyPlan(plan, output.resolve("models/translate"), ProcessingFixtures.reference, options)
       val projection = me.nsmr.vocabsurgery.processing.PlanStore.loadVerified(plan).domain.projection
       val deleted = (0 until projection.originalSize).find(i => projection.compact(me.nsmr.vocabsurgery.core.OriginalTokenId(i)).isEmpty).get

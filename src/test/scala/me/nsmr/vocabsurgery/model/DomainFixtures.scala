@@ -7,7 +7,7 @@ import me.nsmr.vocabsurgery.kanji.JapaneseKanjiReference
 import me.nsmr.vocabsurgery.tokenizer.*
 
 object DomainFixtures:
-  val policy = PruningPolicy(JapaneseKanjiReference.fromCharacters(CodePoint.sequence("日本").toSet))
+  val policy = CharacterPolicy(JapaneseKanjiReference.fromCharacters(CodePoint.sequence("日本").toSet))
   val foreign = ByteLevel.encode(TokenSurface("ع"))
   private val quantization = Json.obj("bits" -> Json.fromInt(4), "group_size" -> Json.fromInt(4), "mode" -> Json.fromString("affine"))
 

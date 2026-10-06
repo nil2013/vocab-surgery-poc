@@ -19,7 +19,7 @@ object ExternalTools:
       val mapping = directory.resolve("mapping.json")
       val nfc = directory.resolve("nfc.json")
       ProcessingIO.write(mapping, prepared.domain.projection.compactToOriginalJson)
-      ProcessingIO.write(nfc, Json.fromValues(prepared.domain.policy.japanese.sortedCharacters.map(cp =>
+      ProcessingIO.write(nfc, Json.fromValues(prepared.domain.policy.normalizationSamples.map(cp =>
         Json.arr(Json.fromString(cp.text), Json.fromString(UnicodeData.normalize(TokenSurface(cp.text)).text)))))
       val report = directory.resolve("result.json")
       run(python, helpers.resolve("check_tokenizer.py"), Vector("--source", prepared.source.directory.toString, "--model", output.toString,
