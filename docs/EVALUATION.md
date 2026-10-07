@@ -111,6 +111,13 @@ helper はケースと hash、submodule revision、server・package情報、全�
 python3 scripts/probe_replies.py http://127.0.0.1:8302/v1 <model> test-data scripts/prompts/mixed-ja.json "$RUN/mixed.jsonl"
 ```
 
+prompts ファイルの代わりに replay ケースの directory（`<dir>/cases/replay/*.json`、`request.messages` と `request.tools` を持つもの）も渡せる。[claude_transcript_cases.py](../scripts/claude_transcript_cases.py) は、手元の Claude Code の transcript（既定は `~/.claude/projects` の下を自動で探索）から、ユーザーが入力した依頼と、それに続く tool call と結果の数件までを切り出して、この形式のケースにする。切り出す位置は seed から再現できるランダムな選択。ケースはユーザー自身の会話なので、`outputs` の下に書き、コミットしない。
+
+```sh
+python3 scripts/claude_transcript_cases.py --out outputs/runs/claude-transcript-cases --count 3 --seed 0
+python3 scripts/probe_replies.py http://127.0.0.1:8302/v1 <model> test-data outputs/runs/claude-transcript-cases "$RUN/transcript.jsonl" 800
+```
+
 ## Flash-Next
 
 Flash-Next は oMLX ではなく、実験用に改造した TensorFold で serve する。その取得・serve・評価の道具は Flash-Next 専用として [scripts/flash-next](../scripts/flash-next/README.md) にまとめてある。2026-10-07 の比較結果は [Flash-Next の serve 比較](EVALUATION_FLASH_NEXT_20261007.md)。

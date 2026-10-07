@@ -24,6 +24,8 @@ try:
     import greek_fragments
 except ImportError:
     greek_fragments = None
+import claude_transcript_cases
+import probe_replies
 
 spec = importlib.util.spec_from_file_location("make_suite", SCRIPTS / "make-suite.py")
 make_suite = importlib.util.module_from_spec(spec)
@@ -381,6 +383,36 @@ class EvaluationTests(unittest.TestCase):
             profile.write_text("corpus:\n  - path: x\nreplace:\n  order: random\n")
             with self.assertRaises(ValueError):
                 flash_next_draft_vocab.load_profile(profile)
+
+    def test_transcript_cases_start_at_typed_requests_and_cut_after_tool_results(self):
+        rec = lambda kind, content, **extra: json.dumps({"type": kind, "message": {"role": kind, "content": content, **extra}})
+        lines = [rec("user", "<local-command-caveat>x</local-command-caveat>"),
+                 rec("user", "ファイルを読んで"),
+                 rec("assistant", [{"type": "thinking", "thinking": ""}], id="m1"),
+                 rec("assistant", [{"type": "text", "text": "読みます"}], id="m1"),
+                 rec("assistant", [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "a.py"}}], id="m1"),
+                 rec("user", [{"type": "tool_result", "tool_use_id": "t1", "content": "print(1)" * 10}]),
+                 rec("assistant", [{"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "ls"}}], id="m2"),
+                 rec("user", [{"type": "tool_result", "tool_use_id": "t2", "content": [{"type": "text", "text": "a.py"}]}]),
+                 rec("user", "[Request interrupted by user]"),
+                 rec("user", "ありがとう")]
+        evs = claude_transcript_cases.events(lines)
+        self.assertEqual(claude_transcript_cases.candidates(evs), [(0, 2)])
+        messages = claude_transcript_cases.case_messages(evs, 0, 1, 20)
+        self.assertEqual([m["role"] for m in messages], ["system", "user", "assistant", "tool"])
+        self.assertEqual(messages[2]["content"], "読みます")
+        self.assertEqual(json.loads(messages[2]["tool_calls"][0]["function"]["arguments"]), {"file_path": "a.py"})
+        self.assertTrue(messages[3]["content"].endswith("[... 60 more characters]"))
+        tools = claude_transcript_cases.tool_definitions(claude_transcript_cases.case_messages(evs, 0, 2, 100))
+        self.assertEqual([t["function"]["name"] for t in tools], ["Bash", "Read"])
+        self.assertEqual(list(tools[1]["function"]["parameters"]["properties"]), ["file_path"])
+        with tempfile.TemporaryDirectory() as directory:
+            case_dir = Path(directory) / "cases" / "replay"
+            case_dir.mkdir(parents=True)
+            (case_dir / "cc_00.json").write_text(json.dumps({"id": "cc_00", "request": {"messages": messages, "tools": tools}}))
+            name, shown, sent, sent_tools = next(probe_replies.requests(directory))
+            self.assertEqual((name, shown, len(sent), len(sent_tools)), ("cc_00", "ファイルを読んで", 4, 2))
+            self.assertIn("a.py", probe_replies.context_text(sent))
 
     @unittest.skipUnless(Path("/usr/bin/sandbox-exec").is_file(), "macOS coding execution only")
     def test_python_fixed_tests_fail_wrong_code_and_deny_writes_outside_temporary_directory(self):
