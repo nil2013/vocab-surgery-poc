@@ -66,6 +66,8 @@ tool は `a4dfe26`（policy を trait 化する前）、policy は `ja-en-coding
 
 成果物は `outputs/runs/flash-next-ja-en-coding-v2`、`outputs/models/flash-next-ja-en-coding-v2`（git 管理外）。
 
+同日、tool `cae6726` と policy `ja-en-coding-v4` で同じ手順を実行した。行数は 248,320 → 172,416（直接削除 75,617、間接削除 44、未登録行 243）、payload の削減は 242,892,800 bytes。全 3,747 tensors の byte 照合、参照 tokenizer、行の token 一致 172,416 行、`vocab.json`／`merges.txt`／`ple-token-ids.json` の検査と、再検証がすべて通過した。間接削除の 44 行は、元の tokenizer の merge 規則でも作られない token（`ワクチン`、`マラソン` など。元の語彙に 201 個あり、残りは直接削除）だった。成果物は `outputs/runs/flash-next-ja-en-coding-v4`、`outputs/models/flash-next-ja-en-coding-v4`。
+
 ### TensorFold でのロード検査（2026-10-07）
 
 本番の serve 環境とは別に、TensorFold `cb2ebf05` を `outputs/tensorfold` に clone し、ブランチ `vocab-surgery-ple-token-ids`（`912415a`）で `ple-token-ids.json` を読む改造を加えた。改造は 4 ファイルで、PLE の hash に元の語彙数と元の ID（履歴と PLE EOS も元の ID）を使う。続く `8afb41b` で、組み込みの draft 語彙リストを PLE 対応表で加工後の ID に変換して使うようにした（削除済みの token はリストから落ちる）。それ以前は加工済み checkpoint では拒否していた。専用の venv と CUDA 拡張の build directory を clone 内に置いた。検査 script と結果は `outputs/runs/flash-next-ja-en-coding-v2/tensorfold-load/`。

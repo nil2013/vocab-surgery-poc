@@ -16,21 +16,22 @@ Qwen3.8-Flash-Next（MLX 4bit MTP 版 `2b170fa6`）に対する追加 pruning �
 | 元の checkpoint | 248,320 | |
 | `ja-en-coding-v2` | 181,103 | 適用・再検証済み。改造 TensorFold でロードと生成を確認 |
 | `ja-en-coding-v3`（v2 ＋ Greek の語の断片 1,148 件） | 179,955 | policy を作成し、計画のみ |
+| `ja-en-coding-v4`（v3 ＋ 拡張 Latin ＋ `hanForms` の `priority` ＋ 端数削り 86 件） | 172,416 | 適用・再検証済み（2026-10-07）。改造 TensorFold でロードと評価を確認（[serve 比較](EVALUATION_FLASH_NEXT_20261007.md#6-v4-の追加評価)） |
 
 ## 候補一覧
 
 | 候補 | v3 からの追加削減 | 使う機能 | 状態 |
 | --- | ---: | --- | --- |
 | Greek の語の断片（3 字以上、またはアクセント付き 2 字以上） | v2 から 1,148 行 | 削除リスト | 採用済み（v3） |
-| 簡体字形・繁体字形の Han 漢字（`hanForms`） | 1,274〜2,811 行 | `hanForms` | 設定の選択と目視確認を待つ |
-| ベトナム語固有の Latin 文字 | 2,667 行 | `explicitForbidden` | 次の候補 |
-| トルコ語・ポーランド語などの拡張 Latin 文字 | 2,671 行（cleanup 込み 2,679） | `explicitForbidden`（文字を選ぶ） | 次の候補 |
+| 簡体字形・繁体字形の Han 漢字（`hanForms`） | 1,274〜2,811 行 | `hanForms` | 採用（v4、`priority`、目視による `keep` なし） |
+| ベトナム語固有の Latin 文字 | 2,667 行 | `explicitForbidden` | 採用（v4。`ũ ĩ` も含める） |
+| トルコ語・ポーランド語などの拡張 Latin 文字 | 2,671 行（cleanup 込み 2,679） | `explicitForbidden`（文字を選ぶ） | 採用（v4。人名・IPA に使う `š ž č ř ə ý ð þ` は残す） |
 | 補完すると Hangul にしかならない部分 UTF-8 | 259 行（他に Hangul か未割り当て 7 行） | 未実装（`PartialUtf8` 保護を緩める機能） | 保留 |
 | 辞書外の中国語の Han 語彙 | 最大 16,545 行 | 削除リスト | 未決定（リストの作り方から） |
 | ASCII だけの外国語の語 | 最大 10,730 行 | 削除リスト | 未決定（技術用語の許可リストが必須） |
 | 西欧のアクセント文字だけを含む語 | 8,498 行（cleanup 込み 9,040） | 削除リスト | 未決定（`café` などを巻き込む） |
 | Arabic・Devanagari 系の記号、U+FFFD、双方向制御など | 53 行 | `explicitForbidden` | 未決定（小規模） |
-| 128 の倍数への最終調整 | 下記 | 削除リスト | 最後に目視で行う |
+| 128 の倍数への最終調整 | 86 行 | 削除リスト | 採用（v4、`policies/flash-next-v4-trim.txt`） |
 
 ### 簡体字形・繁体字形（`hanForms`）
 
