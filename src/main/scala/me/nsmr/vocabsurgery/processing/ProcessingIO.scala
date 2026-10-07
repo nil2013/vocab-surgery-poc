@@ -8,10 +8,10 @@ import scala.util.Using
 import me.nsmr.vocabsurgery.io.*
 
 private[vocabsurgery] object ProcessingIO:
-  val ToolVersion = "0.1.0-SNAPSHOT"
   val printer: Printer = Printer.noSpaces.copy(sortKeys = true)
   def canonical(json: Json): String = printer.print(json)
-  def signature(json: Json): String = MessageDigest.getInstance("SHA-256").digest(canonical(json).getBytes(StandardCharsets.UTF_8)).map(b => f"${b & 255}%02x").mkString
+  def signature(json: Json): String = sha256(canonical(json))
+  def sha256(text: String): String = MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)).map(b => f"${b & 255}%02x").mkString
   def write(path: Path, json: Json): Unit = FileIO.writeNewUtf8(path, canonical(json) + "\n")
   def lines(path: Path, values: Iterator[Json]): Unit = Diagnostics.guard(path, "JSONL write") {
     Using.resource(Files.newBufferedWriter(path, StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) { writer =>

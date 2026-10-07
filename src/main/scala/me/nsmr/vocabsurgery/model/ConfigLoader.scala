@@ -5,41 +5,22 @@ import java.nio.file.Path
 import me.nsmr.vocabsurgery.core.*
 import me.nsmr.vocabsurgery.io.*
 
-/** Typed access to surgery-relevant fields; all other fields are retained verbatim as JSON values. */
+/** Typed access to surgery-relevant fields at the family's paths; all other fields are retained verbatim as JSON values. */
 object ConfigLoader:
   def loadModel(path: Path): ModelConfig = Diagnostics.guard(path, "model config") {
     val root = JsonIO.read(path)
     val fields = JsonFields.obj(root, path, "config")
-    val modelType = JsonFields.text(JsonFields.field(root, "model_type", path, "config"), path, "model_type")
-    val vocabSize = positiveInt(JsonFields.field(root, "vocab_size", path, "config"), path, "vocab_size")
-    val hiddenSize = positiveInt(JsonFields.field(root, "hidden_size", path, "config"), path, "hidden_size")
-    val tied = fields("tie_word_embeddings").map(JsonFields.bool(_, path, "tie_word_embeddings")).getOrElse(false)
+    val family = ModelFamily.of(root)
+    def required(at: JsonPath): Json = at.get(root).filterNot(_.isNull).getOrElse(Diagnostics.invalid(path, at.text, "required field is missing or null"))
+    val sizes = family.vocabSize.map(at => positiveInt(required(at), path, at.text))
+    Diagnostics.check(sizes.distinct.size == 1, path, family.vocabSize.map(_.text).mkString(", "), "vocabulary sizes disagree")
+    val hiddenSize = positiveInt(required(family.hiddenSize), path, family.hiddenSize.text)
     val mlxQuant = fields("quantization").filterNot(_.isNull).map(parseQuantization(_, path, "quantization"))
     val hfQuant = fields("quantization_config").filterNot(_.isNull).map(parseQuantization(_, path, "quantization_config"))
-    val quantization = mlxQuant.orElse(hfQuant).getOrElse {
-      Diagnostics.invalid(path, "quantization", "quantized checkpoint requires quantization settings")
-    }
     Diagnostics.check(mlxQuant.isEmpty || hfQuant.isEmpty || mlxQuant == hfQuant,
       path, "quantization", "quantization and quantization_config disagree")
-    ModelConfig(modelType, vocabSize, hiddenSize, tied, quantization, tokenIds(root, path), root)
+    ModelConfig(family, sizes.head, hiddenSize, mlxQuant.orElse(hfQuant), root)
   }
-
-  def loadGeneration(path: Path): GenerationConfig =
-    val root = JsonIO.read(path)
-    JsonFields.obj(root, path, "generation config")
-    GenerationConfig(tokenIds(root, path), root)
-
-  private def tokenIds(root: Json, path: Path): Map[String, TokenIdSetting] =
-    val fields = JsonFields.obj(root, path, "config")
-    Vector("bos_token_id", "eos_token_id", "pad_token_id", "decoder_start_token_id")
-      .flatMap { name => fields(name).filterNot(_.isNull).map { value =>
-        val setting = value.asArray match
-          case Some(ids) =>
-            Diagnostics.check(ids.nonEmpty, path, name, "token ID list must not be empty")
-            TokenIdSetting.Multiple(ids.zipWithIndex.map { (id, index) => tokenId(id, path, s"$name[$index]") })
-          case None => TokenIdSetting.Single(tokenId(value, path, name))
-        name -> setting
-      }}.toMap
 
   private def parseQuantization(value: Json, path: Path, location: String): QuantizationConfig =
     val fields = JsonFields.obj(value, path, location)

@@ -1,0 +1,26 @@
+{
+  "description": "Fixed prompts for decode speed, TTFT and draft acceptance; the first trial of each prompt and mode is a warm-up.",
+  "trials": 4,
+  "warmups": 1,
+  "maxTokens": 400,
+  "temperature": 0,
+  "extra": {
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    }
+  },
+  "prompts": [
+    {
+      "name": "ja",
+      "text": "日本語で、HTTP/2 と HTTP/3 の違いを、接続確立・多重化・輸送層の観点から600字程度で説明してください。"
+    },
+    {
+      "name": "en",
+      "text": "Explain in about 300 words how a B-tree differs from a binary search tree and why databases prefer B-trees."
+    },
+    {
+      "name": "code",
+      "text": "Write a Python module implementing a thread-safe LRU cache class with get, put and a TTL option. Reply with code only."
+    }
+  ]
+}

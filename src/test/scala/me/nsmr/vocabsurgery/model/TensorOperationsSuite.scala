@@ -35,17 +35,18 @@ class TensorOperationsSuite extends munit.ScalaCheckSuite:
     val snapshot = DomainFixtures.snapshot()
     val tensors = snapshot.shards.head.tensors.map(t => t.name -> t).toMap
     val module = "model.embed_tokens"
-    assertEquals(QuantizedVocabularyModule.validate(module, snapshot.config, tensors).bytesPerRow, 12L)
-    intercept[DomainException](QuantizedVocabularyModule.validate(module, snapshot.config, tensors - s"$module.biases"))
+    assertEquals(VocabularyModule.validate(module, snapshot.config, tensors).bytesPerRow, 12L)
+    intercept[DomainException](VocabularyModule.validate(module, snapshot.config, tensors.updated(s"$module.extra", tensors(s"$module.weight").copy(name = s"$module.extra"))))
+    intercept[DomainException](VocabularyModule.validate(module, snapshot.config, tensors - s"$module.biases"))
     Vector(QuantizationSpec(3, 4, "affine"), QuantizationSpec(4, 0, "affine"), QuantizationSpec(4, 4, "mxfp4")).foreach { spec =>
-      intercept[DomainException](QuantizedVocabularyModule.validate(module, snapshot.config.copy(quantization = QuantizationConfig(spec, Map.empty)), tensors))
+      intercept[DomainException](VocabularyModule.validate(module, snapshot.config.copy(quantization = Some(QuantizationConfig(spec, Map.empty))), tensors))
     }
-    intercept[DomainException](QuantizedVocabularyModule.validate(module, snapshot.config.copy(hiddenSize = 7), tensors))
+    intercept[DomainException](VocabularyModule.validate(module, snapshot.config.copy(hiddenSize = 7), tensors))
     val weight = tensors(s"$module.weight")
-    intercept[DomainException](QuantizedVocabularyModule.validate(module, snapshot.config, tensors.updated(weight.name, weight.copy(dtype = TensorDType.I32))))
+    intercept[DomainException](VocabularyModule.validate(module, snapshot.config, tensors.updated(weight.name, weight.copy(dtype = TensorDType.I32))))
     val scales = tensors(s"$module.scales")
-    intercept[DomainException](QuantizedVocabularyModule.validate(module, snapshot.config, tensors.updated(scales.name, scales.copy(shape = Vector(snapshot.config.vocabSize.toLong, 1L)))))
-    intercept[DomainException](QuantizedVocabularyModule.validate(module, snapshot.config, tensors.updated(scales.name, scales.copy(dtype = TensorDType.I16))))
+    intercept[DomainException](VocabularyModule.validate(module, snapshot.config, tensors.updated(scales.name, scales.copy(shape = Vector(snapshot.config.vocabSize.toLong, 1L)))))
+    intercept[DomainException](VocabularyModule.validate(module, snapshot.config, tensors.updated(scales.name, scales.copy(dtype = TensorDType.I16))))
   }
 
   property("copy spans implement exactly the projected row order for arbitrary survivor sets") {

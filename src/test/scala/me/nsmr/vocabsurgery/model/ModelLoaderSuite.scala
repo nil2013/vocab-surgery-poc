@@ -56,13 +56,15 @@ class ModelLoaderSuite extends munit.FunSuite:
     fixture { directory =>
       val snapshot = SnapshotLoader.load(directory)
       assertEquals(snapshot.config.vocabSize, 4)
-      assertEquals(snapshot.config.quantization.overrides("model.layers.0.mlp.gate"), QuantizationSpec(8, 4, "affine"))
+      assertEquals(snapshot.config.family, CoderNext)
+      assertEquals(snapshot.config.quantization.map(_.overrides("model.layers.0.mlp.gate")), Some(QuantizationSpec(8, 4, "affine")))
       assertEquals(snapshot.config.original.hcursor.downField("extra").get[Boolean]("keep"), Right(true))
       assertEquals(snapshot.tokenizer.addedTokens.head.special, false)
       assertEquals(snapshot.tokenizer.merges, Vector(BpeMerge("a", "b")))
       assertEquals(snapshot.shards.head.tensors.size, 6)
       assertEquals(snapshot.metadataFingerprints.size, 6)
-      assertEquals(snapshot.generation.tokenIds("eos_token_id"), TokenIdSetting.Multiple(Vector(OriginalTokenId(3))))
+      assertEquals(snapshot.generation.hcursor.get[Vector[Int]]("eos_token_id"), Right(Vector(3)))
+      assertEquals(snapshot.tokenizerCompanions, Map.empty)
     }
   }
 
@@ -117,9 +119,10 @@ class ModelLoaderSuite extends munit.FunSuite:
       intercept[DataException](ConfigLoader.loadModel(path))
       replace(path, config.mapObject(_.add("quantization_config", Json.obj("bits" -> Json.fromInt(8), "group_size" -> Json.fromInt(4)))))
       intercept[DataException](ConfigLoader.loadModel(path))
+      replace(path, config.mapObject(_.add("model_type", Json.fromString("unknown"))))
+      assert(intercept[DataException](ConfigLoader.loadModel(path)).getMessage.contains("no model family"))
       replace(path, config.mapObject(_.add("eos_token_id", Json.fromInt(-1))))
-      val error = intercept[DataException](ConfigLoader.loadModel(path))
-      assertEquals(error.location, "eos_token_id")
+      assert(intercept[DataException](SnapshotLoader.load(directory)).getMessage.contains("eos_token_id"))
     }
   }
 
@@ -129,11 +132,22 @@ class ModelLoaderSuite extends munit.FunSuite:
       replace(generation, Json.obj("eos_token_id" -> Json.fromInt(4)))
       val invalid = intercept[DataException](SnapshotLoader.load(directory))
       assertEquals(invalid.source, generation)
-      assertEquals(invalid.location, "eos_token_id")
+      assertEquals(invalid.location, "$.eos_token_id")
       Files.delete(generation)
       val missing = intercept[DataException](SnapshotLoader.load(directory))
       assertEquals(missing.kind, ErrorKind.MissingFile)
       assertEquals(missing.source, generation)
+    }
+  }
+
+  test("chat template is optional and source slow tokenizer files are read when present") {
+    fixture { directory =>
+      Files.delete(directory.resolve("chat_template.jinja"))
+      Files.writeString(directory.resolve("merges.txt"), "a b\n")
+      val snapshot = SnapshotLoader.load(directory)
+      assertEquals(snapshot.chatTemplate, None)
+      assertEquals(snapshot.tokenizerCompanions, Map("merges.txt" -> "a b\n"))
+      assertEquals(snapshot.metadataFingerprints.size, 6)
     }
   }
 

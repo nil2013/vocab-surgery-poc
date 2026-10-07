@@ -56,14 +56,14 @@ final case class BpeGraph private (
     reached.toSet
 
 object BpeGraph:
-  def from(tokenizer: TokenizerData): BpeGraph =
+  def from(tokenizer: TokenizerData, scheme: TokenizerScheme): BpeGraph =
     val tokens = tokenizer.vocabulary
     DomainChecks.check(tokens.map(_.encoded).distinct.size == tokens.size && tokens.map(_.id).distinct.size == tokens.size,
       "duplicate-vocabulary", "BPE graph", "duplicate token keys or IDs")
-    tokens.foreach(token => ByteLevel.decode(token.encoded))
+    tokens.foreach(token => scheme.decode(token.encoded))
     val vocabulary = tokens.map(token => token.encoded -> token.id).toMap
-    val roots = ByteLevel.alphabet.map { key =>
-      vocabulary.getOrElse(key, DomainChecks.fail("missing-base-byte", "BPE graph", key))
+    val roots = scheme.baseKeys.map { key =>
+      vocabulary.getOrElse(key, DomainChecks.fail("missing-base-token", "BPE graph", key))
     }.toSet
     DomainChecks.check(tokenizer.merges.distinct.size == tokenizer.merges.size, "duplicate-merge", "BPE graph", "duplicate merge rules")
     val edges = tokenizer.merges.zipWithIndex.map { (merge, rank) =>

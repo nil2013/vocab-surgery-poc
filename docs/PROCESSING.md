@@ -4,11 +4,14 @@
 
 ## 計画と入力の同一性
 
-`PolicySettings` は version 1／2 の JSON を読み、未知の field、型違い、null、未対応値を拒否する。新規設定は version 2 で、`protectMath=true` が既定値。version 1 は従来どおり Math 保護なしで読み書きし、保存済み plan と manifest の policy hash・意味を維持する。例えば現在の全 default を明記した policy は以下。
+`PolicyFile` は policy JSON を読む。`kind` で戦略を選び、`parameterCount` で index の parameter 数の扱いを決め、残りの fields は kind ごとの `PolicySettings` が読む。未知の kind・field、型違い、null、未対応値は拒否する。`PolicySettings` は戦略が読む参照入力（`inputs`）を宣言し、`load` で domain の `PruningPolicy` と入力の指紋（`fingerprint`）、kind 固有のレポートを返す。plan は指紋を保存し、再計算時に一致を要求する。出力は参照入力と重なってはならない。`plan --policy` を省略すると既定の `characters` policy を使う。
+
+現行の kind は `characters`（`CharacterPolicySettings` → `CharacterPolicy`）だけで、`japaneseReference` に日本語漢字の参照データ directory（既定 `kanji-data`）を指定する。`protectMath=true` が既定値。例えば現在の全 default を明記した policy は以下。
 
 ```json
 {
-  "formatVersion": 2,
+  "kind": "characters",
+  "japaneseReference": "kanji-data",
   "unicodeVersion": "17.0.0",
   "forbiddenScripts": ["Arabic", "Cyrillic", "Hangul"],
   "pruneHanOutsideReference": true,
@@ -24,15 +27,31 @@
 
 文字集合は Unicode scalar の整数値、ID は旧整数 ID、content は文字列で指定する。`protectedContents` は added token の literal、既存の encoded key、decoded UTF-8 surface を照合する。存在しない保護指定は停止条件。`parameterCount` の別値 `verified-logical-weights` はドメインの検証済み logical weight 数を採用する。未登録行 policy は現在 `drop` のみ。
 
+`deletedTokens` は token 単位の削除リストのパスの配列（任意、例：`["policies/greek-fragments-flash-next.txt", "policies/flash-next-v4-trim.txt"]`）。モデルをまたいで使うリストと、そのモデルだけの調整のリストを分けて持てる。リストは 1 行に JSON 文字列リテラルを 1 つ書く形式で（`" yang"`、`"什么"`、`"\n\n"`）、先頭の空白や改行を曖昧さなく書ける。空行と `#` で始まる行は読み飛ばし、同じリスト内の重複と、リストをまたぐ重複は停止条件。added token はその内容、lexical token は decoded surface との完全一致で照合し、一致した token を理由 `listed` で削除する。構造的保護や `protectedContents`・Math 保護に当たる token は残し、衝突として報告する。どの token にも一致しない行は停止条件にせず、`summary.json` の `policy.deletionList` と `deletion-list-unmatched.jsonl` に出すので、同じリストを複数のモデルに使える。各リストは参照入力として SHA-256 を plan に記録し、どれかを編集すると保存済み plan の再検証が止まる。`summary.json` の `rowsAboveMultiple` は、行数を 64／128／256 の倍数に合わせるのにあと何行削ればよいかを示す。
+
+`hanForms`（任意、試作）は、[漢字の静的な判定](DOMAIN.md#漢字の静的な判定) を使って簡体字形・繁体字形の Han 漢字を禁止する。日本語参照集合の中の字も対象になる。
+
+```json
+"hanForms": {"prune": ["simplified", "traditional"], "keepInJMdict": "any", "keep": "佇儘"}
+```
+
+- `prune`：削る字形。少なくとも一つ指定する。
+- `keepInJMdict`：JMdict による保護の強さ。`any`（既定、見出しに一度でも出る字を残す）、`standard`（非標準表記を除いた見出しに出る字を残す）、`priority`（優先度付きの語に出る字を残す）、`none`（保護しない）。
+- `keep`：目視で残すと決めた字。
+
+常用漢字と `子の名に使える漢字` は常に残す。目視で追加で削る字は `explicitForbidden` で指定する。`unihan`／`jmdict` で参照データの directory を指定でき、省略時は ICU の Unicode 版の Unihan と、取得済みの最新の JMdict を使う。plan には解決した path と、両データの版・SHA-256 を記録する。
+
+plan の `han-forms.jsonl` は、語彙に現れる候補の字ごとに判定の事実、その字を含む token の数・例、決定（`pruned`／`kept-daily-japanese`／`kept-jmdict`／`kept-manually`）を出す。目視確認はこの一覧で行う。
+
 `protectMath=true` は ICU の `Math=true` の scalar を Script／Han／明示禁止判定から除外する。Math の文字だけからなる token は `Math` 理由で BPE cleanup からも保護する。混在 token に別の禁止文字があれば削除対象になる。`false` はこの追加保護だけを無効にし、基礎 bytes・protocol・手動保護を解除しない。`α`・`λ`・`א` の数学用途は Math 属性に含まれないため、Script の選択や明示保護で扱う。
 
-version 1 の JSON に `protectMath` を追加することはできない。既存設定を変更する場合は新しい version 2 policy で新規 plan を作る。plan／manifest 自体の container formatVersion は引き続き 1 で、policy の version と別に管理する。日英 coding 用の追加 profile は [PRUNING_JA_EN_CODING_V2.md](PRUNING_JA_EN_CODING_V2.md) を参照。
+policy・plan・manifest は版番号を持たない。形式が変わった後の古い成果物は移行せず、入力から作り直す。日英 coding 用の追加 profile は [PRUNING_JA_EN_CODING_V2.md](PRUNING_JA_EN_CODING_V2.md) を参照。
 
-`PlanStore.prepare` は source／漢字 directory の実 path を確定し、loaders、policy、`ModelOperations.plan` を合成する。`InputInventory` は全ファイルの相対名、サイズ、mtime、file key を記録する。metadata と assets は全 SHA-256、safetensors は header SHA-256 を記録する。plan 時点では巨大な payload 全体の hash は計算しない。入力の cache file symlink は参照できるが、symlink directory、特殊ファイル、index 外の safetensors は拒否する。
+`PlanStore.prepare` は source と policy の参照入力の実 path を確定し、loaders、policy、`ModelOperations.plan` を合成する。`InputInventory` は全ファイルの相対名、サイズ、mtime、file key を記録する。metadata と assets は全 SHA-256、safetensors は header SHA-256 を記録する。plan 時点では巨大な payload 全体の hash は計算しない。入力の cache file symlink は参照できるが、symlink directory、特殊ファイル、index 外の safetensors は拒否する。
 
-`plan.json` は tool／format version、source、漢字入力 commit と hash、settings、inventory、projection、shard headers、metadata 更新を含む。canonical JSON は key 順序を固定し、整数を `Double` に変換しない。`PlanStore.loadVerified` は現在の入力から計画を再計算し、署名と内容を比較する。保存された byte ranges を無検証に実行しない。
+`plan.json` は source、実 path にした policy、policy 入力の指紋（`characters` では漢字入力の commit と hash、Unicode provider）、inventory、モデル系列、projection、shard headers、生成する出力ファイルの SHA-256 を含む。canonical JSON は key 順序を固定し、整数を `Double` に変換しない。`PlanStore.loadVerified` は現在の入力から計画を再計算し、署名と内容を比較する。保存された byte ranges を無検証に実行しない。
 
-`PlanReports` は inspection、effective policy、双方向 mapping、token と削除理由、BPE cleanup、漢字 provenance／coverage／候補／テキスト欠落診断、summary を保存する。`environment.json` は JVM、OS、heap、作成時刻の sidecar。時刻はモデル bytes に混ぜない。`inspect` のみの run を `plan` で拡張する場合は、inspection と現在の source metadata の一致を確認する。
+`PlanReports` は inspection、effective policy と入力の指紋、双方向 mapping、token と削除・保護理由、BPE cleanup、summary を保存し、policy 固有のレポート（`characters` では漢字 provenance／coverage／候補／テキスト欠落診断）を policy に書かせる。`environment.json` は tool の git commit、JVM、OS、heap、作成時刻の記録。時刻はモデル bytes に混ぜない。`inspect` のみの run を `plan` で拡張する場合は、inspection と現在の source metadata の一致を確認する。
 
 ## 書き込みと公開
 
@@ -43,16 +62,16 @@ version 1 の JSON に `protectMath` を追加することはできない。既�
 1. 保存計画と入力を再検証し、出力・run の再利用を拒否する。
 2. 全ファイルをコピーする最悪条件と 64 MiB reserve で容量を確認する。
 3. UUID の新しい `outputs/.staging` directory に書き込む。
-4. 対象 shard は新 header と copy spans で再構築する。未対象ファイルは macOS `clonefile` を試し、失敗時はコピーする。
-5. metadata／ID／BPE／全 tensor の byte 対応と、外部参照 tokenizer を検証する。
+4. 計画した出力ファイル（config、tokenizer、index、付随ファイル、系列のファイル）を書く。対象 shard は新 header と copy spans で再構築する。その他のファイルは `FileTransfer` の copy-on-write clone を試し、できなければコピーする。
+5. 出力ファイルの内容／ID／BPE／全 tensor の byte 対応と、外部参照 tokenizer を検証する。出力のファイル集合は source のファイルと生成ファイルの和に一致する必要がある。
 6. source の変更を再確認し、全 source／output files の SHA-256 とサイズ、コピー方式、検証結果を manifest に保存する。
 7. staging を最終 model directory に公開し、`publication.json` に完了時刻を記録する。
 
-macOS の公開は `renamex_np(RENAME_EXCL)` で既存 directory を置換しない。出力は独立した regular files とし、hard link と model 内の symlink は許さない。APFS clone は書き込み時に分離されるため、source inode への依存にはならない。
+公開は `FileTransfer.publishNew` が行い、既存 directory を置換しない（macOS `renamex_np(RENAME_EXCL)`、Linux `renameat2(RENAME_NOREPLACE)`）。排他的な rename を持たない OS では処理を開始しない。出力は独立した regular files とし、hard link と model 内の symlink は許さない。copy-on-write clone は書き込み時に分離されるため、source inode への依存にはならない。manifest の各ファイルの `method` は `generated`、`row-projection`、clone 方式名（`clonefile`／`ficlone`）、`buffered-copy` のいずれか。
 
 `BinaryTransfer` はデフォルト 1 MiB、最大 16 MiB の buffer と checked `Long` 計算で転送する。safetensors offsets は payload-relative。packed weights、scales、biases は同じ projection 順序で切り出す。非対象 tensor も source と全 byte を比較する。再量子化や Transformer／MoE の変更は行わない。
 
-参照検証 callback は `passed=true` を返す必要があり、省略できない。CLI は常に [check_tokenizer.py](../scripts/check_tokenizer.py) を使う。合成テストだけは明示した synthetic contract を使い、Hugging Face coverage と区別する。
+参照検証 callback は `passed=true` を返す必要があり、省略できない。CLI は常に [check_tokenizer.py](../scripts/check_tokenizer.py) を使う。この helper は tokenizer の round trip と chat template に加え、各行が source の同じ token を保持すること、`vocab.json`／`merges.txt` が `tokenizer.json` と一致すること、`ple-token-ids.json` が射影（と source の表）に従うことを確認する。合成テストだけは明示した synthetic contract を使い、Hugging Face coverage と区別する。
 
 ## 検証と失敗時の扱い
 
@@ -62,4 +81,4 @@ macOS の公開は `renamex_np(RENAME_EXCL)` で既存 directory を置換しな
 
 再開機能は実装していない。原因を直して新しい run と model path で計画を作り直す。公開が未完了だった staging は内容を確認してから手動で片付ける。既存 run の report を消して使い回す運用は行わない。
 
-`ProcessingSuite` は計画改変、source／漢字変更、容量不足、参照検証失敗、既存出力、symlink／escape、manifest／payload 改変、削除なしのコピー、clone の inode 分離、2 GiB 超の sparse offset を検証する。CLI の引数・help・helper 失敗・timeout・評価 gate は `CliSuite`。JVM heap 512 MiB と sparse files によるチェックを維持する。
+`ProcessingSuite` は計画改変、source／漢字変更、容量不足、参照検証失敗、既存出力、置換しない公開、symlink／escape、manifest／payload 改変、Flash-Next 形式の適用と生成ファイルの欠落検出、削除なしのコピー、clone の inode 分離、2 GiB 超の sparse offset を検証する。CLI の引数・help・helper 失敗・timeout・評価 gate は `CliSuite`。JVM heap 512 MiB と sparse files によるチェックを維持する。

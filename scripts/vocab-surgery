@@ -8,11 +8,14 @@ fi
 cd "$REPO_DIR"
 if [ -n "${JAVA_HOME:-}" ]; then
   task_java="$JAVA_HOME/bin/java"
-elif [ -x /opt/homebrew/opt/openjdk/bin/java ]; then
-  task_java=/opt/homebrew/opt/openjdk/bin/java
-elif [ -x /usr/local/opt/openjdk/bin/java ]; then
-  task_java=/usr/local/opt/openjdk/bin/java
 else
-  task_java=java
+  task_java=$(command -v java || true)
+fi
+# The jars target Java 17; an older default java fails later with an opaque class-version error.
+version=$("${task_java:-java}" -XshowSettings:properties -version 2>&1 | sed -n 's/^ *java\.specification\.version = \([0-9.]*\).*/\1/p')
+major=${version%%.*}
+if [ -z "$major" ] || [ "$major" -lt 17 ]; then
+  echo "JDK 17 or later is required (found: ${task_java:-none}, version ${version:-unknown}). Set JAVA_HOME." >&2
+  exit 2
 fi
 exec "$task_java" --enable-native-access=ALL-UNNAMED -Xmx512m -cp "$REPO_DIR/target/cli/lib/*" me.nsmr.vocabsurgery.cli.Main "$@"

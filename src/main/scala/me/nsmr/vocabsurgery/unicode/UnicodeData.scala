@@ -25,7 +25,9 @@ object UnicodeData:
   private val version = UCharacter.getUnicodeVersion
   DomainChecks.check(version == VersionInfo.getInstance(17, 0, 0, 0), "unicode-version", "ICU4J",
     s"expected Unicode 17.0.0, found $version")
-  val provenance: UnicodeProvenance = UnicodeProvenance("ICU4J", VersionInfo.ICU_VERSION.toString, "17.0.0")
+  /** The Unicode version of ICU's bundled data, e.g. 17.0.0; reference data such as Unihan should match it. */
+  val unicodeVersion: String = s"${version.getMajor}.${version.getMinor}.${version.getMilli}"
+  val provenance: UnicodeProvenance = UnicodeProvenance("ICU4J", VersionInfo.ICU_VERSION.toString, unicodeVersion)
   private val nfc = Normalizer2.getNFCInstance()
 
   def script(codePoint: CodePoint): UnicodeScript = UnicodeScript.fromCode(UScript.getScript(codePoint.intValue))
