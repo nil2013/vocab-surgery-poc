@@ -65,7 +65,7 @@ test-data の submodule は差し替える可能性が高い。特定の素材�
 - 推論環境ごとの capability（持たない環境もある）：
   - `DraftSwitch`：request ごとに MTP の draft を切り替える（TF の `draft` field）
   - `DraftStatistics`：ログの行から、request ごとの受理数・提案数を取る（TF）
-  - `DraftVocabulary`：draft 語彙のリストを差し替える（TF の `--draft-vocab`）
+  - `DraftList`：組み込みの draft 語彙のリストの場所（TF の `draft_vocab.txt`）。差し替えは起動 option（TF の `--draft-vocab`）
 
 ### `evaluation`：自前の評価と段取り
 
@@ -76,8 +76,8 @@ test-data の submodule は差し替える可能性が高い。特定の素材�
 
 ### TensorFold に固有の操作
 
-- `DraftVocabularyProfile`（基準のリスト、選ぶ規則、落とす規則、保護する token、明示的な追加・削除）と、`DraftVocabulary.rebuild(profile, corpus, tokenizer, checkpoint)`。コーパスは中立の形式（`{"text": …}` の JSONL）で受け取る。
-- profile は今は YAML である。Scala で読むには YAML のライブラリを依存に足すか、既存の Circe で読める JSON に変える（7 節）。
+- `DraftVocabularyProfile`（基準のリスト、選ぶ規則、落とす規則、保護する token、明示的な追加・削除）と、`DraftVocabulary.rebuild(profile, corpus, source, runtime: DraftList, model, tokenization)`。コーパスは中立の形式（`{"text": …}` の JSONL）で受け取る。profile は JSON（7 節）。
+- コーパスの token の数え上げは HF tokenizers に依存するので、B3 の参照実装（`scripts/tokenization.py` の `count`・`encode`）に任せ、`ReferenceTokenization` として受け取る。
 
 ## 4. CLI
 
@@ -164,3 +164,12 @@ test-data の submodule は差し替える可能性が高い。特定の素材�
 - このときの結果：coding 30/30、FIM 10/10、tool 10/10（両方）。混入用 150 出力のうち禁止 scalar を含む出力は 3 → 0。日本語の目視評価は未入力。TF の usage には prefill／decode の速度がないので、suite 内の速度は TTFT、全時間、scalar/s だけが値を持つ。
 - テスト：`evaluation.OwnSuiteSuite`、`processing.ProcessingSuite`（ツールの取得）、`cli.CliSuite`（偽の helper と推論環境での `evaluate`・`review`）。Python 側は `scripts/tests/test_references.py`（`check_tokenizer.py`、`logits.py`、`tokenization.py`）。
 - Python の `sandbox.py`、`code_checks.py`、`evaluate.py`、`review-evaluation.py`、`make-suite.py`、`serve-evaluation.py`、`setup-evaluation-tools.py` と、そのテストを削除した。
+
+## 12. 段階 6 の結果（draft 語彙の入れ替え）
+
+- `runtime` パッケージ：capability の `DraftList`（組み込みのリストの場所。`TensorFoldClone` は clone の `qwen4_exp` CUDA の `draft_vocab.txt`）、`DraftVocabularyProfile`（JSON、未知の key と未対応の規則を拒否）、`TokenName`（ID、または added token の中身・語彙の key・1 token に encode される文字列）、`ReferenceTokenization`、`DraftVocabulary`（`corpus`、`swap`、`resolve`、`rebuild`）。
+- コーパスの数え上げと、profile の文字列の encode は、B3 の参照実装 `scripts/tokenization.py` の `count`・`encode` に任せる（7 節）。Scala はコーパスの読み込みと重複の除去、規則の適用、出力を持つ。
+- CLI：`draft-vocab --profile P --corpus C... --source SNAPSHOT [--model PRUNED] --python PY --out FILE [--tensorfold-clone DIR]`。
+- 参照実装との一致（実機確認、DGX、元の Flash-Next の tokenizer、TF の clone の組み込みリスト）：リポジトリの文書とコードの段落から作った中立のコーパス 2 ファイル（1,390 段落）で、profile 2 種（`corpus-frequent.json`、強制の追加・削除と保護を含む profile）× 加工モデルの有無の 4 通りについて、Python 版と出力のリストがバイト単位で一致し、報告（入れ替え数、落とした ID、例示の token の文字列、coverage）も一致した。
+- テスト：`runtime.DraftVocabularySuite`（入れ替えの規則、強制の追加・削除、残す token、profile の読み込み、コーパスと名前の解決、新規作成の出力）と `cli.CliSuite`。
+- Python の `scripts/flash-next/draft_vocab.py` を削除した。

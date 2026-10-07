@@ -119,6 +119,36 @@ class CliSuite extends munit.FunSuite:
     }
   }
 
+  test("draft-vocab rebuilds the clone's built-in list with the reference tokenization helper and refuses an existing output") {
+    val root = Files.createTempDirectory("vocab-cli-draft-")
+    try
+      val source = Files.createDirectories(root.resolve("source"))
+      Files.writeString(source.resolve("tokenizer.json"), """{"model":{"type":"BPE","vocab":{"a":0,"b":1,"c":2,"d":3},"merges":[]},""" +
+        """"added_tokens":[{"id":4,"content":"<|im_end|>","special":true,"single_word":false,"lstrip":false,"rstrip":false,"normalized":false}]}""")
+      val builtin = root.resolve("clone/src/tensorfold/families/qwen4_exp/cuda/draft_vocab.txt")
+      Files.createDirectories(builtin.getParent)
+      Files.writeString(builtin, "0\n1\n4\n")
+      val helpers = Files.createDirectories(root.resolve("helpers"))
+      Files.writeString(helpers.resolve("tokenization.py"), "import json,sys\nfrom pathlib import Path\na=sys.argv\n" +
+        "texts=json.loads(Path(a[a.index('--texts')+1]).read_text())\nids=[[ord(c)-97 for c in t] for t in texts]\n" +
+        "flat=[i for t in ids for i in t]\nout=sorted([[i,flat.count(i)] for i in set(flat)]) if a[1]=='count' else ids\n" +
+        "Path(a[a.index('--out')+1]).write_text(json.dumps(out))\n")
+      val corpus = root.resolve("corpus.jsonl")
+      Files.writeString(corpus, "{\"text\": \"cca\"}\n")
+      val profile = root.resolve("profile.json")
+      Files.writeString(profile, "{}")
+      val options = ProcessingOptions(outputRoot = root.resolve("outputs"))
+      val args = Vector("draft-vocab", "--profile", profile.toString, "--corpus", corpus.toString, "--source", source.toString,
+        "--python", "python3", "--tensorfold-clone", root.resolve("clone").toString, "--out", root.resolve("outputs/draft.txt").toString)
+      val (code, text, error) = invoke(args, options, helpers)
+      assertEquals(code, 0, error)
+      assertEquals(Files.readString(root.resolve("outputs/draft.txt")), "0\n2\n4\n")
+      assertEquals(io.circe.jawn.parse(text).toOption.get.hcursor.get[Int]("swapped"), Right(1))
+      assertEquals(invoke(args, options, helpers)._1, 1)
+    finally
+      scala.util.Using.resource(Files.walk(root))(_.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.foreach(Files.deleteIfExists))
+  }
+
   test("sandbox-check reports every implementation; sandbox-run confines a command or refuses without a sandbox") {
     val (code, text, _) = invoke(Vector("sandbox-check"))
     assertEquals(code, 0)

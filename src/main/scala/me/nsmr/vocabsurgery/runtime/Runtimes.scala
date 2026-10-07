@@ -59,7 +59,7 @@ final case class OMlx(python: Path) extends InferenceRuntime with ModelResidency
   * of upstream token ids can replace its built-in one.
   */
 final case class TensorFoldClone(directory: Path, context: Int = 65536, pleOnSsd: Boolean = true, draftVocabulary: Option[Path] = None,
-    cudaHome: Path = Path.of("/usr/local/cuda"), promptCache: Boolean = true) extends InferenceRuntime with DraftSwitch with DraftStatistics:
+    cudaHome: Path = Path.of("/usr/local/cuda"), promptCache: Boolean = true) extends InferenceRuntime with DraftSwitch with DraftStatistics with DraftList:
   val name = "tensorfold"
   /** The clone as an absolute path: the server runs in its own directory. */
   private val home = directory.toAbsolutePath.normalize
@@ -88,6 +88,8 @@ final case class TensorFoldClone(directory: Path, context: Int = 65536, pleOnSsd
           "sha256" -> Json.fromString(FileIO.sha256(path)))))))
 
   def draftField(enabled: Boolean): (String, Json) = "draft" -> Json.fromBoolean(enabled)
+
+  def builtinDraftList: Path = home.resolve("src/tensorfold/families/qwen4_exp/cuda/draft_vocab.txt")
 
   def draftRecords(log: Path): Vector[DraftRecord] =
     FileIO.readUtf8(log).linesIterator.collect { case done(prompt, tokens, rate, rounds, accepted, proposed) =>

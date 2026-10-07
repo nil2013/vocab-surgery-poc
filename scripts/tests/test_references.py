@@ -1,4 +1,5 @@
-"""Tests of the Python reference implementations (B3): logits and check_tokenizer."""
+"""Tests of the Python reference implementations (B3): logits, check_tokenizer and tokenization."""
+import importlib.util
 import json
 import math
 import subprocess
@@ -11,6 +12,8 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 import logits
 import check_tokenizer
+
+TOKENIZERS = importlib.util.find_spec("tokenizers") is not None
 
 
 class ReferenceTests(unittest.TestCase):
@@ -67,6 +70,25 @@ class ReferenceTests(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 check_tokenizer.check_files(source, model, mapping)
 
+
+    @unittest.skipUnless(TOKENIZERS, "needs tokenizers")
+    def test_tokenization_counts_and_encodes_texts_without_special_tokens(self):
+        from tokenizers import Tokenizer, models, pre_tokenizers
+        with tempfile.TemporaryDirectory() as root:
+            tokenizer = Tokenizer(models.WordLevel({"a": 0, "b": 1, "[UNK]": 2}, unk_token="[UNK]"))
+            tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+            path = Path(root, "tokenizer.json")
+            tokenizer.save(str(path))
+            Path(root, "texts.json").write_text(json.dumps(["a b a", "b c"]))
+            def run(command):
+                out = Path(root, f"{command}.json")
+                subprocess.run([sys.executable, str(SCRIPTS / "tokenization.py"), command, "--tokenizer", str(path),
+                                "--texts", str(Path(root, "texts.json")), "--out", str(out)], check=True, capture_output=True)
+                return json.loads(out.read_text())
+            self.assertEqual(run("encode"), [[0, 1, 0], [1, 2]])
+            self.assertEqual(run("count"), [[0, 2], [1, 2], [2, 1]])
+            with self.assertRaises(subprocess.CalledProcessError):
+                run("count")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,11 @@ transformers and token ids come from tokenizers.
            For [{"id", "text", "position"}], the token id whose offsets cover each position (or null).
   versions --out FILE
            Versions of the client packages the comparison depends on.
+  count    --tokenizer FILE --texts FILE --out FILE
+           [[id, count], ...] by id: how often each token id occurs when the texts (a JSON array) are encoded without
+           special tokens. The draft vocabulary rebuild counts its corpus with it.
+  encode   --tokenizer FILE --texts FILE --out FILE
+           The token ids of each text (a JSON array), encoded without special tokens.
 """
 import argparse
 import importlib.metadata
@@ -66,6 +71,25 @@ def versions(args):
     write_new(args.out, found)
 
 
+def encoded(args):
+    from tokenizers import Tokenizer
+    tokenizer = Tokenizer.from_file(str(args.tokenizer))
+    texts = json.loads(args.texts.read_text(encoding="utf-8"))
+    return [encoding.ids for encoding in tokenizer.encode_batch(texts, add_special_tokens=False)]
+
+
+def count(args):
+    counts = {}
+    for ids in encoded(args):
+        for value in ids:
+            counts[value] = counts.get(value, 0) + 1
+    write_new(args.out, sorted([value, n] for value, n in counts.items()))
+
+
+def encode(args):
+    write_new(args.out, encoded(args))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -77,8 +101,12 @@ def main():
         two.add_argument("--" + name, type=Path, required=True)
     three = sub.add_parser("versions")
     three.add_argument("--out", type=Path, required=True)
+    for name in ["count", "encode"]:
+        texts = sub.add_parser(name)
+        for option in ["tokenizer", "texts", "out"]:
+            texts.add_argument("--" + option, type=Path, required=True)
     args = parser.parse_args()
-    {"suite": suite, "locate": locate, "versions": versions}[args.command](args)
+    {"suite": suite, "locate": locate, "versions": versions, "count": count, "encode": encode}[args.command](args)
 
 
 if __name__ == "__main__":

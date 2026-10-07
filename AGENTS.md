@@ -56,6 +56,7 @@ Run from the repository root with JDK 17+. Compiler warnings are errors. No sepa
 | CLI dispatch, argument / helper failures | `cli.CliSuite` |
 | Confined execution of generated code | `sandbox.SandboxSuite` (its live tests need a sandbox on the host; report skips) |
 | Inference runtimes, serving and their logs | `runtime.RuntimeSuite`, `cli.CliSuite` |
+| MTP draft list rebuild | `runtime.DraftVocabularySuite`, `cli.CliSuite` |
 | Chat client, speed, external runs | `evaluation.EvaluationSuite`, `cli.CliSuite` |
 | Own fixed suite, code checks, comparison and review | `evaluation.OwnSuiteSuite` (code checks need a sandbox, `stageCli` and fetched Node / TypeScript; report skips), `cli.CliSuite` |
 

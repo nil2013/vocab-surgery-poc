@@ -27,6 +27,28 @@ object ExternalTools:
       JsonIO.read(report)
     finally Using.resource(Files.walk(directory)) { paths => paths.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.foreach(Files.delete) }
 
+  /** Token ids from Hugging Face tokenizers through scripts/tokenization.py, for the tokenizer.json at `tokenizer`. */
+  def tokenization(python: Path, helpers: Path, tokenizer: Path): me.nsmr.vocabsurgery.runtime.ReferenceTokenization =
+    new me.nsmr.vocabsurgery.runtime.ReferenceTokenization:
+      private def call(command: String, texts: Vector[String]): Json =
+        val directory = Files.createTempDirectory("vocab-tokenization-")
+        try
+          val input = directory.resolve("texts.json")
+          val out = directory.resolve("result.json")
+          ProcessingIO.write(input, Json.fromValues(texts.map(Json.fromString)))
+          run(python, helpers.resolve("tokenization.py"), Vector(command, "--tokenizer", tokenizer.toString, "--texts", input.toString,
+            "--out", out.toString), directory.resolve("helper.log"), 3600)
+          JsonIO.read(out, 1L << 30)
+        finally Using.resource(Files.walk(directory)) { paths => paths.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.foreach(Files.delete) }
+      def counts(texts: Vector[String]): Map[Int, Long] =
+        val out = call("count", texts)
+        JsonFields.array(out, tokenizer, "counts").map { pair =>
+          val values = JsonFields.array(pair, tokenizer, "counts")
+          JsonFields.int(values(0), tokenizer, "id") -> JsonFields.long(values(1), tokenizer, "count")
+        }.toMap
+      def encode(texts: Vector[String]): Vector[Vector[Int]] =
+        JsonFields.array(call("encode", texts), tokenizer, "encodings").map(ids => JsonFields.array(ids, tokenizer, "ids").map(JsonFields.int(_, tokenizer, "id")))
+
   /** Run a repository helper with a new combined-output log; terminate its descendants on timeout. */
   def run(python: Path, script: Path, args: Vector[String], log: Path, timeoutSeconds: Int): Unit =
     require(timeoutSeconds > 0, "timeout must be positive")

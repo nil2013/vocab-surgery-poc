@@ -19,7 +19,11 @@ final case class Arguments(command: String = "", source: Path = Path.of("."), ru
     ids: Path = Path.of("."), idsOutput: Path = Path.of("."), referenceName: String = "", referenceVersion: Option[String] = None, sha256: Option[String] = None,
     profileSource: Option[Path] = None, profileText: Option[String] = None, kanjiDirectory: Path = Path.of("kanji-data"),
     unihanDirectory: Option[Path] = None, jmdictDirectory: Option[Path] = None,
-    trials: Int = 5, warmups: Int = 1, copyOnly: Boolean = false, sandbox: SandboxArguments = SandboxArguments(), serve: ServeArguments = ServeArguments())
+    trials: Int = 5, warmups: Int = 1, copyOnly: Boolean = false, sandbox: SandboxArguments = SandboxArguments(), serve: ServeArguments = ServeArguments(),
+    draft: DraftArguments = DraftArguments())
+
+/** Options of the draft-vocab command. */
+final case class DraftArguments(profile: Path = Path.of("."), corpus: Vector[Path] = Vector.empty, model: Option[Path] = None, output: Path = Path.of("."))
 
 /** Options of the serve command; runtime-specific ones apply only to their runtime. */
 final case class ServeArguments(runtime: String = "", models: Vector[(String, Path)] = Vector.empty, serverDirectory: Path = Path.of("."),
@@ -140,8 +144,17 @@ object Main:
         (serveOptions ++ Seq(
           opt[String]("material").required().action((v, c) => c.copy(serve = c.serve.copy(material = Path.of(v)))).text("The material's directory; its runner and formats stay its own"),
           opt[String]("copy-to").action((v, c) => c.copy(serve = c.serve.copy(copyTo = Some(Path.of(v))))).text("New directory under outputs to copy the material into and run in"),
-          arg[String]("<command>...").unbounded().required().action((v, c) => c.copy(serve = c.serve.copy(command = c.serve.command :+ v)))))*))
-
+          arg[String]("<command>...").unbounded().required().action((v, c) => c.copy(serve = c.serve.copy(command = c.serve.command :+ v)))))*),
+      cmd("draft-vocab").action((_, c) => c.copy(command = "draft-vocab"))
+        .text("Rebuild the TensorFold clone's MTP draft list from a JSON profile and a neutral corpus, keeping its number of rows").children(
+        opt[String]("profile").required().action((v, c) => c.copy(draft = c.draft.copy(profile = Path.of(v)))).text("JSON profile, e.g. scripts/flash-next/draft-vocab/corpus-frequent.json"),
+        opt[String]("corpus").required().unbounded().action((v, c) => c.copy(draft = c.draft.copy(corpus = c.draft.corpus :+ Path.of(v))))
+          .text("JSONL of generated texts, one {\"text\": ...} per line (repeatable)"),
+        opt[String]("source").required().action((v, c) => c.copy(source = Path.of(v))).text("Upstream checkpoint whose tokenizer.json counts the corpus"),
+        opt[String]("model").action((v, c) => c.copy(draft = c.draft.copy(model = Some(Path.of(v))))).text("Pruned checkpoint whose kept tokens (PLE table) bound the list"),
+        opt[String]("out").required().action((v, c) => c.copy(draft = c.draft.copy(output = Path.of(v)))).text("New list under outputs, one upstream id per line"),
+        python.text("Python with tokenizers; the corpus is counted with the reference tokenizer"),
+        opt[String]("tensorfold-clone").action((v, c) => c.copy(serve = c.serve.copy(cloneDirectory = Path.of(v)))).text("Clone whose built-in list is the base; default outputs/tensorfold")))
 
   def main(args: Array[String]): Unit = sys.exit(execute(args.toVector))
 
@@ -149,7 +162,7 @@ object Main:
   def execute(args: Vector[String], options: ProcessingOptions = ProcessingOptions(), helpers: Path = Path.of("scripts"),
       out: PrintStream = System.out, err: PrintStream = System.err): Int =
     val normalized = if args.isEmpty then Vector("--help") else if args.head == "help" then args.tail :+ "--help" else args
-    if normalized.contains("--help") && (normalized.size == 1 || Set("inspect", "plan", "apply", "verify", "translate-ids", "fetch-reference", "profile-han", "evaluate", "sandbox-check", "sandbox-run", "serve", "measure-speed", "run-external", "review")(normalized.head)) then
+    if normalized.contains("--help") && (normalized.size == 1 || Set("inspect", "plan", "apply", "verify", "translate-ids", "fetch-reference", "profile-han", "evaluate", "sandbox-check", "sandbox-run", "serve", "measure-speed", "run-external", "review", "draft-vocab")(normalized.head)) then
       out.println(OParser.usage(parser))
       return 0
     val (parsed, effects) = OParser.runParser(parser, normalized, Arguments())
@@ -209,6 +222,12 @@ object Main:
               val arguments = config.serve
               me.nsmr.vocabsurgery.evaluation.ExternalRun.run(arguments.inferenceRuntime, arguments.request,
                 me.nsmr.vocabsurgery.evaluation.ExternalRun(arguments.material, arguments.copyTo, arguments.command), runtime)
+            case "draft-vocab" =>
+              import me.nsmr.vocabsurgery.runtime.*
+              val arguments = config.draft
+              DraftVocabulary.rebuild(DraftVocabularyProfile.load(arguments.profile), arguments.profile, arguments.corpus, config.source,
+                TensorFoldClone(config.serve.cloneDirectory), arguments.model,
+                ExternalTools.tokenization(config.python, helpers, config.source.resolve("tokenizer.json")), arguments.output, runtime)
             case "sandbox-run" =>
               val options = config.sandbox
               Sandbox.platform(options.sandboxChoice).run(options.command, Confinement(options.workDirectory, options.readable,
