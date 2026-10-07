@@ -8,7 +8,7 @@ import scala.jdk.CollectionConverters.*
 import scala.util.Using
 import me.nsmr.vocabsurgery.io.Diagnostics
 import me.nsmr.vocabsurgery.processing.{ProcessingIO, ProcessingOptions}
-import me.nsmr.vocabsurgery.runtime.{InferenceRuntime, ServeRequest}
+import me.nsmr.vocabsurgery.runtime.{EndpointCommand, InferenceRuntime, ServeRequest}
 
 /** An external evaluation material's documented CLI to run against a served endpoint (B1 in
   * docs/EVALUATION_ARCHITECTURE.md). The material keeps its runner, scoring, code execution and result formats; this
@@ -42,17 +42,16 @@ object ExternalRun:
     }
     target
 
-  /** Serve, run the material's command in the material (or its copy), stop, and record the run in the server directory. */
-  def run(runtime: InferenceRuntime, request: ServeRequest, external: ExternalRun, options: ProcessingOptions): Json =
+  /** Serve, run the material's command in the material (or its copy) with its output sent to `output`, stop, and
+    * record the run in the server directory.
+    */
+  def run(runtime: InferenceRuntime, request: ServeRequest, external: ExternalRun, options: ProcessingOptions,
+      output: java.io.OutputStream = System.err): Json =
     Diagnostics.check(Files.isDirectory(external.material), external.material, "material", "not a directory")
     val workDirectory = external.copy.fold(external.material.toRealPath())(copy => copyTree(external.material, copy, options))
     val server = runtime.serve(request, options)
     val exitCode =
-      try
-        val builder = ProcessBuilder(external.command.asJava).directory(workDirectory.toFile).inheritIO()
-        builder.environment().put("VOCAB_ENDPOINT", server.endpoint.base.toString)
-        builder.environment().put("VOCAB_MODELS", server.endpoint.models.mkString(","))
-        builder.start().waitFor()
+      try EndpointCommand.run(external.command, server.endpoint, Some(workDirectory), output)
       finally server.close()
     val record = Json.obj("material" -> Json.fromString(external.material.toRealPath().toString),
       "materialRevision" -> revision(external.material).fold(Json.Null)(Json.fromString),

@@ -10,7 +10,7 @@
 
 | 境界 | こちら側 | 相手側 | またいでよいもの |
 | --- | --- | --- | --- |
-| B1. 外部の評価素材（今は `test-data` submodule、test-data-fn、coding-bench-lite。差し替えうる） | 加工したモデルを serve し、endpoint を用意する | ケースの形式、出題文の組み立て、採点、生成コードの実行とその隔離、指標、runner、集計 | 素材が文書で公開している CLI（`--base`、`--model`、`--label` など）と、素材が書き出す結果ファイル（こちらは置き場所を記録するだけで、中身を解釈しない） |
+| B1. 外部の評価素材（今は `test-data` submodule の `vocab-surgery-eval`。差し替えうる） | 加工したモデルを serve し、endpoint を用意する | ケースの形式、出題文の組み立て、採点、生成コードの実行とその隔離、指標、runner、集計 | 素材が文書で公開している CLI（`--base`、`--model`、`--label` など）と、素材が書き出す結果ファイル（こちらは置き場所を記録するだけで、中身を解釈しない） |
 | B2. 推論環境（oMLX、TensorFold の clone） | 起動、終了、計測の段取り | 推論そのもの | 起動オプション、OpenAI 互換の HTTP API、文書化されたログの行（TF の `done req … accepted=`） |
 | B3. 外部の参照実装（Python） | 結果の判定と記録 | HF tokenizers による tokenizer の独立検証（`check_tokenizer.py`）、MLX による logits の比較（`logits.py`） | 引数と JSON の入出力（今の `ExternalTools` と同じ） |
 | B4. モデル系列・推論環境に固有の部分 | 共通の操作 | 系列ごと（`ModelFamily`）、推論環境ごとの実装 | trait のメソッド |
@@ -106,15 +106,13 @@ test-data の submodule は差し替える可能性が高い。特定の素材�
 
 ## 6. 外部の評価素材への変更案
 
-- **test-data、test-data-fn**
-  - runner が生成コードを隔離せずに実行している。Linux でも使える隔離の手段（たとえば外から与える実行コマンドの前置き）を runner に持たせる。
-  - 結果の出力先を指定できるようにする（今はパッケージの中の `results/` に固定）。
-  - 生成だけを行い、コードの実行を後回しにするモード。
-  - 混在した入力への依頼文（今の `scripts/prompts/mixed-ja*.json`）と、Claude Code の transcript からケースを作る道具（今の `claude_transcript_cases.py`）を、素材の側のケースと道具として持つ。
-  - draft 語彙のコーパスとして、replay の生成部分を中立の形式で書き出す機能。
-- **coding-bench-lite**
-  - 生成だけを行うモードと、保存した出力の採点（`rescore`）を、隔離して実行する手段。
-  - Linux での隔離実行。
+2026-10-07 に、評価素材は `vocab-surgery-eval`（`test-data` submodule、`55135dd`）に入れ替わった。これは、以前の test-data（Coder-Next）、test-data-fn（Flash-Next）、coding-bench-lite を 1 つにまとめたもので、replay、合成テスト、coding、history の 4 つの task を持つ。runner は `--base`、`--model`、`--label`、`--extra` を受け取る。以下は、この素材の runner と文書（`docs/usage.md`）で確かめた状況と、残る変更案である。
+
+- **生成コードの隔離実行**（未対応）：合成テストの runner（`run_synthetic.py`）と coding の runner（`coding/run.py`）は、生成コードを host でそのまま `subprocess` で実行する。Linux でも使える隔離の手段（たとえば外から与える実行コマンドの前置き）を runner に持たせる。
+- **結果の出力先の指定**（未対応）：結果は素材の中の `runs/<task>/…/<label>/<日付>.*` に固定で、同じ日に同じ label で回すと上書きされる。こちらは `run-external --copy-to` で複製した中で回す。
+- **生成だけを行い、コードの実行を後回しにするモード**（一部対応）：coding には保存した出力の採点だけをやり直す `rescore` がある。生成だけのモードはなく、合成テストには `rescore` もない。`rescore` を隔離して実行する手段も合わせて要る。
+- **ケースを作る道具**（一部対応）：opencode の会話履歴から replay のケースを作る道具（`build_replay_cases.py`）が素材の側にある。混在した入力への依頼文と、Claude Code の transcript からケースを作る道具は、まだない。
+- **draft 語彙のコーパスの書き出し**（未対応）：replay の生成部分を、中立の形式（1 行に `{"text": …}`）で書き出す機能。`draft-vocab` の `--corpus` に渡す。
 
 ## 7. 決めたこと（2026-10-07）
 

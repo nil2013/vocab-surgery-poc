@@ -8,6 +8,7 @@ import java.time.Duration as JavaDuration
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.*
 import scala.jdk.CollectionConverters.*
+import scala.util.Using
 import me.nsmr.vocabsurgery.io.{Diagnostics, FileIO}
 import me.nsmr.vocabsurgery.processing.{ProcessingIO, ProcessingOptions}
 
@@ -56,6 +57,23 @@ trait DraftStatistics:
 trait ModelResidency:
   def load(endpoint: Endpoint, model: String): Unit
   def unload(endpoint: Endpoint, model: String): Unit
+
+/** A command run against a served endpoint, as `serve` and external evaluation materials do. */
+object EndpointCommand:
+  /** Run `command` in `directory` (the current one when None) with VOCAB_ENDPOINT (the /v1 base) and VOCAB_MODELS
+    * (comma-separated served names) set, and return its exit code. Its standard output and error go to `output`, so
+    * the caller's standard output stays free for its own result.
+    */
+  def run(command: Vector[String], endpoint: Endpoint, directory: Option[Path], output: java.io.OutputStream): Int =
+    require(command.nonEmpty, "no command to run")
+    val builder = ProcessBuilder(command.asJava).redirectInput(ProcessBuilder.Redirect.INHERIT).redirectErrorStream(true)
+    directory.foreach(path => builder.directory(path.toFile))
+    builder.environment().put("VOCAB_ENDPOINT", endpoint.base.toString)
+    builder.environment().put("VOCAB_MODELS", endpoint.models.mkString(","))
+    val process = builder.start()
+    Using.resource(process.getInputStream)(_.transferTo(output))
+    output.flush()
+    process.waitFor()
 
 /** Starting, readiness and stopping shared by the runtimes. */
 private[runtime] object ServerProcess:

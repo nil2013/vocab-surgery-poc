@@ -57,7 +57,7 @@ baseline → unload → pruned の順で測定した。元モデルの全測定�
 
 ## 2. test-data の出力比較
 
-合成の採点規則は [test-data の metrics](../test-data/docs/metrics.md) に従う。複数 seed のケースは全サンプル合格をケースの PASS とする。
+合成の採点規則は、当時の素材（`qwen3-coder-next-pruning-testdata`、`ce193e0`）の `docs/metrics.md` に従う。複数 seed のケースは全サンプル合格をケースの PASS とする。
 
 | 群 | 元モデル | v2 |
 | --- | --- | --- |
@@ -84,7 +84,7 @@ baseline → unload → pruned の順で測定した。元モデルの全測定�
 
 元 / v2 とも、67件の concluded 指標の言語内訳は ja 2 / en 65 / zh 0、leak は0件。したがって、replay では混入減少は観測不能。過去の履歴で中国語だったケースも、今回の元モデルでの再生成では2サンプルとも英語であり、過去の出力との比較から今回の効果を推定しない。
 
-67件には、`<tool_call>` を文字列として含む30件も双方で含まれる。これらの tool は実行していない。`stop` / 非空 text という指標だけで、実際に最終報告まで完成したとは判断できない。[cases.md](../test-data/docs/cases.md) にある入力再構成の近似も残る。
+67件には、`<tool_call>` を文字列として含む30件も双方で含まれる。これらの tool は実行していない。`stop` / 非空 text という指標だけで、実際に最終報告まで完成したとは判断できない。当時の素材の `docs/cases.md` にある入力再構成の近似も残る。
 
 ### Tokenization の測定範囲
 
