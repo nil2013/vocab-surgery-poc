@@ -85,9 +85,9 @@ object Main:
         opt[String]("ids").required().action((v, c) => c.copy(ids = Path.of(v))).text("Whitespace-separated source token IDs"),
         opt[String]("out").required().action((v, c) => c.copy(idsOutput = Path.of(v))).text("New file under the output root, one ID per line")),
       cmd("fetch-reference").action((_, c) => c.copy(command = "fetch-reference"))
-        .text("Download reference data (unihan, jmdict) into <output root>/reference/<name>/<version>, checked by SHA-256").children(
+        .text("Download reference data (unihan, jmdict) or evaluation tools (node, typescript) into <output root>/reference/<name>/<version>, checked by SHA-256 or the publisher's digest").children(
         arg[String]("<name>").action((v, c) => c.copy(referenceName = v)).text(ReferenceFetch.sources.map(_.name).mkString(" | ")),
-        opt[String]("version").action((v, c) => c.copy(referenceVersion = Some(v))).text("unihan: Unicode version (default ICU's); jmdict: expected creation date"),
+        opt[String]("version").action((v, c) => c.copy(referenceVersion = Some(v))).text("unihan: Unicode version (default ICU's); jmdict: expected creation date; node, typescript: release (default 24.21.0, 6.0.2)"),
         opt[String]("sha256").action((v, c) => c.copy(sha256 = Some(v))).text("Expected download digest when none is built in")),
       cmd("profile-han").action((_, c) => c.copy(command = "profile-han"))
         .text("Write static facts (kanji lists, Unihan variants, JMdict usage) for the Han characters of a vocabulary or text").children(

@@ -101,6 +101,27 @@ class ProcessingSuite extends munit.FunSuite:
     }
   }
 
+  test("a tool source is checked against its publisher's digest and unpacked into a versioned directory") {
+    val root = Files.createTempDirectory("vocab-tool-fetch-")
+    try
+      val build = Files.createDirectories(root.resolve("build/package/lib"))
+      Files.writeString(build.resolve("tsc.js"), "// tsc\n")
+      val archive = root.resolve("typescript.tgz")
+      val tar = ProcessBuilder("tar", "-czf", archive.toString, "-C", root.resolve("build").toString, "package").start()
+      assertEquals(tar.waitFor(), 0)
+      val integrity = "sha512-" + java.util.Base64.getEncoder.encodeToString(java.security.MessageDigest.getInstance("SHA-512").digest(Files.readAllBytes(archive)))
+      def registry(stated: String): ReferenceFetch.Opener = uri =>
+        if uri.getPath.endsWith(".tgz") then Files.newInputStream(archive)
+        else java.io.ByteArrayInputStream(s"""{"version":"9.9.9","dist":{"integrity":"$stated"}}""".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+      val options = ProcessingOptions(outputRoot = root.resolve("outputs"))
+      intercept[DataException](ReferenceFetch.fetch(TypeScriptSource, Some("9.9.9"), None, options, registry("sha512-AAAA")))
+      val record = ReferenceFetch.fetch(TypeScriptSource, Some("9.9.9"), None, options, registry(integrity)).hcursor
+      assertEquals(record.get[Boolean]("verified"), Right(true))
+      assert(record.downField("files").get[String]("package").exists(_.startsWith("tree:")))
+      assert(Files.isRegularFile(TypeScriptSource.compiler(ReferenceFetch.directory(root.resolve("outputs"), TypeScriptSource, "9.9.9"))))
+    finally Using.resource(Files.walk(root))(_.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.foreach(Files.delete))
+  }
+
   private def unihanFile(directory: Path, version: String = me.nsmr.vocabsurgery.unicode.UnicodeData.unicodeVersion): Path =
     val file = directory.resolve("Unihan_Variants.txt")
     // 日 has no variant; 发 is a simplified form of 發; 發 a traditional form; 国 (常用) has the traditional variant 國.
