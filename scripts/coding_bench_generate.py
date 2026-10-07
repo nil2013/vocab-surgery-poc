@@ -4,7 +4,7 @@
 The prompts, code extraction and request body come from the bench's tools/run.py (loaded from --bench), with its
 default sampling. Requests go one at a time, so a TensorFold server log can be attributed with
 scripts/flash-next/acceptance.py (each row also carries `case` and `setting`). Generated code is never executed:
-rows keep `ok: null` and `detail: "not executed"`; `run.py rescore --file` scores them where a sandbox exists.
+rows keep `ok: null` and `detail: "not executed"`; scripts/coding_bench_score.py scores them in the host's sandbox.
 
 Usage: coding_bench_generate.py --bench DIR --base URL --model ID --label LABEL --out FILE [--samples 3]
        [--lang python,scala,rust] [--only id,...] [--extra JSON]

@@ -17,8 +17,8 @@ Flash-Next は oMLX では serve できない。そこで、upstream の TensorF
 | `setup-tensorfold.sh` | upstream（`https://github.com/ashhart/TensorFold.git`）の `cb2ebf05` を `outputs/tensorfold`（`TF_CLONE` で変更）に取得し、ブランチ `vocab-surgery-ple-token-ids` に patch を `git am` で当て、clone 内に `.venv`（Python 3.13、torch 2.14.1+cu130、editable install）を作る。既存の clone は上書きしない |
 | `tensorfold-patches/` | clone に当てる改造。`ple-token-ids.json`（PLE 対応表）を読み、PLE の hash に元の語彙数と元の ID を使う。draft 語彙のリスト（TF の `draft_vocab.txt`、または `--draft-vocab` で渡すファイル）を加工後の ID に変換する |
 | `serve.sh` | checkpoint を `--ple-on-ssd --context 65536` で `127.0.0.1:$TF_PORT`（既定 18080）に serve し、ready になったら任意のコマンドを `TF_BASE` 付きで実行し、終了時に止める。`TF_SERVE_ARGS` で serve の引数を足せる（例：`--draft-vocab FILE`） |
-| `evaluate.sh` | run directory に `test-data` の results 以外をコピーし、`testdata-no-exec.patch` を当てて、合成テスト（`--par 1`、`enable_thinking: false`）と `bench.py` を実行する。submodule は変更しない |
-| `testdata-no-exec.patch` | 生成 code の sandbox がない host 向けに、code ケースのコードを記録するだけで実行せず、PASS を `null` にする |
+| `evaluate.sh` | run directory に `test-data` の results 以外をコピーし、`testdata-sandboxed-exec.patch` を当てて、合成テスト（`--par 1`、`enable_thinking: false`）と `bench.py` を実行する。submodule は変更しない |
+| `testdata-sandboxed-exec.patch` | test-data の runner の code ケースを、`scripts/sandbox.py` の sandbox で実行させる（runner は生成 code を隔離せずに実行するため）。sandbox がない host では、そのケースは失敗になる |
 | `bench.py` | 日本語・英語・Python の 3 prompt を、MTP あり／なし（request の `draft`）で各 4 回、temperature 0、400 tokens で送る。最初の 1 回は warm-up として集計から除く |
 | `draft_vocab.py` | YAML の profile とコーパスから、MTP の draft 語彙のリストを作り直す。行数は基準のリスト（TF の `draft_vocab.txt`）と同じに保ち、コーパスで頻出する token を頻度順に入れ、コーパスで一度も生成されない行を ID の大きい方から落とす。added tokens（`<|im_end|>` など）は落とさない。repository の `.venv`（tokenizers、numpy、pyyaml）で動かす |
 | `draft-vocab/` | `draft_vocab.py` の profile。`corpus-frequent.yaml` は `outputs/test-data-fn` の生成部分から、言語を問わず頻出 token を選ぶ |

@@ -1,4 +1,4 @@
-"""Run fixed function tests in disposable directories with macOS file / network restrictions."""
+"""Run fixed function tests in disposable directories, confined by the host's sandbox (no network, writes only there)."""
 import json
 import os
 import re
@@ -7,6 +7,8 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+from sandbox import platform as platform_sandbox, python_trees
 
 
 def extract_code(text):
@@ -19,17 +21,14 @@ def java_executable():
     return str(next((path for path in candidates if path.is_file()), Path(shutil.which("java") or "/nonexistent")))
 
 
-def restricted(command, directory, readable, timeout=20):
-    sandbox = Path("/usr/bin/sandbox-exec")
-    if not sandbox.is_file():
-        raise RuntimeError("coding execution needs macOS sandbox-exec; no unrestricted fallback")
-    roots = ["/System", "/usr", "/bin", "/sbin", "/dev", "/Library", "/opt/homebrew", "/private/preboot", "/private/var/db/dyld", str(directory), *map(str, readable)]
-    parents = {str(parent) for root in roots for parent in Path(root).parents} | {"/var", "/etc", "/tmp", "/etc/localtime", "/private/etc/localtime"}
-    allowed = " ".join(f"(subpath {json.dumps(root)})" for root in roots) + " " + " ".join(f"(literal {json.dumps(parent)})" for parent in sorted(parents))
-    profile = f'(version 1)(allow default)(deny network*)(deny file-read-data (require-not (require-any {allowed})))(deny file-write* (require-not (subpath {json.dumps(str(directory))})))'
-    environment = {"PATH": os.defpath, "TMPDIR": str(directory), "LANG": "en_US.UTF-8"}
-    return subprocess.run([str(sandbox), "-p", profile, *map(str, command)], cwd=directory, env=environment,
-                          capture_output=True, text=True, timeout=timeout)
+def java_home():
+    """The JDK tree java_executable() runs from, so a sandbox can mount it read-only."""
+    return Path(java_executable()).resolve().parent.parent
+
+
+def restricted(command, directory, readable, timeout=20, sandbox=None):
+    """Run generated code in the host's sandbox (see sandbox.py); stops when the host has none."""
+    return (sandbox or platform_sandbox()).run(command, directory, readable, timeout=timeout)
 
 
 def scala_value(value):
@@ -54,7 +53,7 @@ def check(case, text, tools, compiler):
                 script = directory / "case.py"
                 harness = "\n".join(f"assert {case['function']}(*{test['args']!r}) == {test['expected']!r}" for test in case["tests"])
                 script.write_text(code + "\n" + harness + '\nprint("VOCAB_TEST_PASS")\n', encoding="utf-8")
-                result = restricted([sys.executable, "-I", script], directory, [Path(sys.executable).resolve().parent.parent])
+                result = restricted([sys.executable, "-I", script], directory, python_trees())
             elif language == "scala":
                 asserts = []
                 for test in case["tests"]:
@@ -67,10 +66,10 @@ def check(case, text, tools, compiler):
                 script.write_text("object Runner {\n" + code + '\ndef main(args: Array[String]): Unit = {\n' + "\n".join(asserts) + '\nprintln("VOCAB_TEST_PASS")\n}\n}\n', encoding="utf-8")
                 classpath = str(compiler.resolve() / "*")
                 compile_result = restricted([java_executable(), "-Xmx384m", "-Djava.io.tmpdir=" + str(directory), "-cp", classpath,
-                                             "dotty.tools.dotc.Main", "-classpath", classpath, "-d", directory, script], directory, [compiler.resolve()], timeout=30)
+                                             "dotty.tools.dotc.Main", "-classpath", classpath, "-d", directory, script], directory, [compiler.resolve(), java_home()], timeout=30)
                 if compile_result.returncode:
                     return {"passed": False, "phase": "compile", "detail": compile_result.stderr[-4000:]}
-                result = restricted([java_executable(), "-Xmx128m", "-cp", str(directory) + os.pathsep + classpath, "Runner"], directory, [compiler.resolve()])
+                result = restricted([java_executable(), "-Xmx128m", "-cp", str(directory) + os.pathsep + classpath, "Runner"], directory, [compiler.resolve(), java_home()])
             elif language == "typescript":
                 node, tsc = Path(tools["node"]), Path(tools["tsc"])
                 script = directory / "case.ts"

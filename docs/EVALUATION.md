@@ -16,7 +16,14 @@ python3 scripts/setup-evaluation-tools.py
 python3 -m unittest discover -s scripts/tests -v
 ```
 
-生成 code は macOS `sandbox-exec` 内で実行する。ネットワークと一時 directory 外への書き込みを拒否し、API key を子の環境に渡さない。Python は固定 asserts、Scala はコンパイル後の asserts、TypeScript は strict compile 後の Node VM tests を使う。timeout と heap 制限を設定する。macOS の制限機構がない環境では実行を停止し、無制限実行に切り替えない。
+生成 code は [sandbox.py](../scripts/sandbox.py) の `Sandbox` を通して実行する。どの実装も、ネットワークを遮断し、書き込みを使い捨ての作業 directory（HOME・TMPDIR・XDG の各 directory もそこに置く）に限り、読み取りをシステムと呼び出し側が渡した tree に限る。API key は子の環境に渡さない。Python は固定 asserts、Scala はコンパイル後の asserts、TypeScript は strict compile 後の Node VM tests を使う。timeout と heap 制限を設定する。
+
+| 実装 | host | 方式 |
+| --- | --- | --- |
+| `sandbox-exec` | macOS | `sandbox-exec` の profile で、ネットワーク・作業 directory 外への書き込み・指定外の読み取りを拒否 |
+| `docker` | Linux（docker server が必要） | 空の image（`vocab-surgery-sandbox:empty`、初回に `FROM scratch` から作る）に host の `/usr`・`/etc` と渡された tree を読み取り専用で mount し、作業 directory だけを書き込み可能にする。`--network none`、`--read-only`、全 capability の削除、呼び出し元の uid、メモリと pid の上限 |
+
+`sandbox.platform()` は `VOCAB_SANDBOX`（`auto`、`sandbox-exec`、`docker`）に従い、`auto` では host の OS で使える実装を選ぶ。使える実装がなければ実行を停止し、無制限実行に切り替えない。
 
 ## 専用 server と CLI
 
@@ -120,11 +127,12 @@ python3 scripts/probe_replies.py http://127.0.0.1:8302/v1 <model> test-data outp
 
 ## coding-bench-lite の生成
 
-[coding_bench_generate.py](../scripts/coding_bench_generate.py) は、ユーザーの coding-bench-lite（15 問 × Python／Scala／Rust）の出題文を、ベンチマーク自身の `tools/run.py` で組み立て、OpenAI 互換の server に 1 本ずつ送る。生成したコードは実行せず、`ok: null` のまま `run.py` と同じ形式で保存する。採点は sandbox のある環境で `run.py rescore --file` を使う。
+[coding_bench_generate.py](../scripts/coding_bench_generate.py) は、ユーザーの coding-bench-lite（15 問 × Python／Scala／Rust）の出題文を、ベンチマーク自身の `tools/run.py` で組み立て、OpenAI 互換の server に 1 本ずつ送る。生成したコードは実行せず、`ok: null` のまま `run.py` と同じ形式で保存する。[coding_bench_score.py](../scripts/coding_bench_score.py) は、ベンチマークの `run_tests` に sandbox を通す subprocess を渡して採点し、新しいファイルに書く。python3、rustc（rustup の home）、scala-cli（JDK と Coursier の cache）を読み取り専用で mount し、scala-cli は Bloop の build server を使わずに compile する。
 
 ```sh
 python3 scripts/coding_bench_generate.py --bench <coding-bench-lite> --base http://127.0.0.1:18080/v1 --model fn \
   --label pruned-v4 --out "$RUN/pruned-v4.jsonl"
+python3 scripts/coding_bench_score.py --bench <coding-bench-lite> --results "$RUN/pruned-v4.jsonl" --out "$RUN/pruned-v4-scored.jsonl"
 ```
 
 ## Flash-Next

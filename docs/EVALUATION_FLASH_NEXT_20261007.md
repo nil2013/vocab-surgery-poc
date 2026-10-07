@@ -27,7 +27,7 @@
 | 測定コード | `8261fbd` の内容（その後 `scripts/flash-next/` の `evaluate.sh`、`bench.py`、`acceptance.py` と、汎用の `scripts/probe_replies.py` に配置を変えた） |
 | 保存先 | `outputs/runs/fn-serve-eval/`（git 管理外） |
 
-元モデルのすべての測定を終えて server を止めてから、pruned-v2 を起動した。code ケース（2 件）は、この host に sandbox がないため実行せず、PASS を `null` とした。
+元モデルのすべての測定を終えて server を止めてから、pruned-v2 を起動した。code ケース（2 件）は、測定の時点ではこの host で使える sandbox がなかったため実行せず、PASS を `null` とした。後に `scripts/sandbox.py` の Docker 実装で、保存したコードを実行した。元モデル・pruned-v2・pruned-v4 とも、2 件すべて PASS だった（実機確認）。
 
 測定コードの扱いについて：
 
@@ -198,7 +198,7 @@ TF は MTP の draft を、同梱の固定リスト（`draft_vocab.txt`、79,591
 ユーザーの coding-bench-lite（15 問、難易度 L1〜L5、Python／Scala／Rust、各 3 サンプル）で v4 を測った。
 
 - **生成**：`scripts/coding_bench_generate.py` で、ベンチマークと同じ出題文と設定（temperature 0.7、top_p 0.8、seed 0〜2、max_tokens 6000、`enable_thinking: false`）を使った。
-- **採点**：ユーザーの許可を得て、生成したコードをこの host で直接実行した（sandbox なし）。ベンチマークの `run.py rescore` を使った。
+- **採点**：最初は、ユーザーの許可を得て、生成したコードをこの host で直接実行した（sandbox なし、ベンチマークの `run.py rescore`）。その後、`scripts/coding_bench_score.py` で、同じ出力を `scripts/sandbox.py` の Docker 実装の中で採点し直した。135 本すべてで判定が一致した（実機確認）。
 - **実行環境**：Python 3.12、rustc 1.98.1、scala-cli 1.17.1（Scala 3.9.0）。ベンチマークの想定は rustc 1.99、scala-cli 1.14、Scala 3.8.3 で、それより新しい。Scala の参照解は 15 問すべて通った。
 - **比較対象**：同梱の元モデルの結果（2026-10-06、本番の TF）。
 

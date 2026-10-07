@@ -4,6 +4,7 @@ import http.server
 import importlib.util
 import json
 import math
+import os
 import tempfile
 import threading
 import unittest
@@ -26,10 +27,22 @@ except ImportError:
     greek_fragments = None
 import claude_transcript_cases
 import probe_replies
+import sandbox
 
 spec = importlib.util.spec_from_file_location("make_suite", SCRIPTS / "make-suite.py")
 make_suite = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(make_suite)
+
+
+def sandbox_available():
+    try:
+        sandbox.platform()
+        return True
+    except sandbox.SandboxUnavailable:
+        return False
+
+
+SANDBOX = sandbox_available()
 
 
 def flash_next(name):
@@ -219,7 +232,7 @@ class EvaluationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 evaluate_testdata.load_baseline(directory, environment, expected, [{"id": "changed"}])
 
-    @unittest.skipUnless(Path("test-data/cases/synthetic/suite.json").is_file() and Path("/usr/bin/sandbox-exec").is_file(), "test-data and macOS sandbox required")
+    @unittest.skipUnless(Path("test-data/cases/synthetic/suite.json").is_file() and SANDBOX, "test-data and a sandbox required")
     def test_testdata_fixed_python_harness_runs_restricted_and_fails_wrong_code(self):
         suite, _, checks, _ = evaluate_testdata.load_data(Path("test-data"))
         case = next(case for case in suite["tests"] if case["id"] == "code_count_by_year")
@@ -414,7 +427,51 @@ class EvaluationTests(unittest.TestCase):
             self.assertEqual((name, shown, len(sent), len(sent_tools)), ("cc_00", "ファイルを読んで", 4, 2))
             self.assertIn("a.py", probe_replies.context_text(sent))
 
-    @unittest.skipUnless(Path("/usr/bin/sandbox-exec").is_file(), "macOS coding execution only")
+    def test_sandbox_platform_picks_an_available_implementation_and_never_runs_unconfined(self):
+        class Fake(sandbox.Sandbox):
+            def __init__(self, name, reason):
+                self.name, self.reason = name, reason
+            def unavailable(self):
+                return self.reason
+            def run(self, command, workdir, readable=(), env=None, timeout=20):
+                raise AssertionError("not run")
+        both = {"docker": Fake("docker", None), "sandbox-exec": Fake("sandbox-exec", "missing")}
+        self.assertEqual(sandbox.platform("docker", both).name, "docker")
+        with self.assertRaises(sandbox.SandboxUnavailable):
+            sandbox.platform("sandbox-exec", both)
+        with self.assertRaises(sandbox.SandboxUnavailable):
+            sandbox.platform("none", both)
+        with self.assertRaises(sandbox.SandboxUnavailable):
+            sandbox.platform("docker", {"docker": Fake("docker", "no server")})
+
+    def test_docker_sandbox_mounts_only_the_work_directory_writable_and_has_no_network(self):
+        with tempfile.TemporaryDirectory() as directory:
+            argv = sandbox.Docker().command("n", ["python3", "-c", "1"], directory, [Path(directory) / "missing", "/usr"], {"A": "b"})
+            joined = " ".join(argv)
+            self.assertIn("--network none", joined)
+            self.assertIn("--read-only", argv)
+            self.assertIn("--cap-drop ALL", joined)
+            writable = [a for a in argv if a.startswith("type=bind") and not a.endswith(",readonly")]
+            self.assertEqual(writable, [f"type=bind,src={os.path.realpath(directory)},dst={os.path.abspath(directory)}"])
+            self.assertNotIn("missing", joined)
+            self.assertIn(f"HOME={os.path.abspath(directory)}", argv)
+            self.assertIn("A=b", argv)
+            self.assertEqual(argv[-3:], ["python3", "-c", "1"])
+
+    @unittest.skipUnless(SANDBOX, "no sandbox on this host")
+    def test_sandbox_blocks_network_and_writes_outside_the_work_directory(self):
+        with tempfile.TemporaryDirectory(dir=Path("outputs").resolve() if Path("outputs").is_dir() else None) as directory:
+            script = Path(directory) / "probe.py"
+            outside = Path(directory).parent / f"must-not-be-created-{os.getpid()}"
+            script.write_text("import socket, pathlib\n"
+                              "try:\n    socket.create_connection(('1.1.1.1', 80), timeout=3); print('NETWORK')\nexcept OSError:\n    print('no network')\n"
+                              f"try:\n    pathlib.Path({str(outside)!r}).write_text('x'); print('WROTE')\nexcept OSError:\n    print('no write')\n"
+                              "pathlib.Path('inside.txt').write_text('ok'); print('inside')\n")
+            result = sandbox.platform().run(["python3", "-I", str(script)], Path(directory), timeout=60)
+            self.assertEqual(result.stdout.split(), ["no", "network", "no", "write", "inside"], result.stderr)
+            self.assertFalse(outside.exists())
+
+    @unittest.skipUnless(SANDBOX, "no sandbox on this host")
     def test_python_fixed_tests_fail_wrong_code_and_deny_writes_outside_temporary_directory(self):
         case = {"kind": "chat", "language": "python", "function": "add", "tests": [{"args": [2, 3], "expected": 5}]}
         self.assertTrue(code_checks.check(case, "def add(a,b):\n return a+b", {}, Path("."))["passed"])

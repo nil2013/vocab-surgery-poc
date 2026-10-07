@@ -15,6 +15,7 @@ import unicodedata
 from pathlib import Path
 
 from code_checks import restricted
+from sandbox import python_trees
 from evaluate import Omlx, RssSampler, quantiles, write_json
 
 
@@ -77,7 +78,7 @@ def score_synthetic(case, response, checks):
             script = directory / "case.py"
             script.write_text(match.group(1) + "\n" + checks[case["check"]])
             result = restricted([sys.executable, "-I", script], directory,
-                                [Path(sys.executable).resolve().parent.parent], timeout=60)
+                                python_trees(), timeout=60)
         return {"passed": result.returncode == 0 and "PASS" in result.stdout,
                 "detail": (result.stdout + result.stderr)[-2000:]}
     if kind in ["leak", "tool"]:
