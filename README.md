@@ -92,7 +92,7 @@ scripts/vocab-surgery verify --manifest "$RUN/manifest.json" --python "$EVAL_PYT
 
 初期 policy は Unicode 17.0.0 の Arabic／Cyrillic／Hangul と、日本語参照集合外の Han 漢字を対象とし、`protectMath=true` を既定にする。変更には `plan --policy outputs/config/pruning.json` を使う。[policy と処理設計](docs/PROCESSING.md) に形式、保護集合、容量、staging、失敗時の再実行方法を記載している。未加工 shard は copy-on-write clone（macOS `clonefile`、Linux `FICLONE`）を試し、ファイルシステムが対応しなければ bounded copy に切り替える。`apply --copy-only` で clone を無効にできる。
 
-日英 coding 用の追加削減には `--policy policies/ja-en-coding-v2.json` を指定できる。 `policies/ja-en-coding-v3.json` は v2 に Greek の語の断片の削除リスト（`policies/greek-fragments-flash-next.txt`、`scripts/greek_fragments.py` で生成）を加えたもの。この profile は Greek／Canadian_Aboriginal を残し、他の追加 Script と `个`・`开`・`关`・`无`・`网` を対象とする。[設定・用例・加工結果](docs/PRUNING_JA_EN_CODING_V2.md)を参照。
+日英 coding 用の追加削減には `--policy policies/ja-en-coding-v2.json` を指定できる。 `policies/ja-en-coding-v3.json` は v2 に Greek の語の断片の削除リスト（`policies/greek-fragments-flash-next.txt`、`scripts/greek_fragments.py` で生成）を加えたもの。`policies/ja-en-coding-v4.json` は v3 にベトナム語・トルコ語・ポーランド語などの拡張 Latin 文字、`hanForms`（`priority`）、Flash-Next の行数を 128 の倍数にそろえる削除リスト（`policies/flash-next-v4-trim.txt`）を加えたもの（Flash-Next で 172,416 行）。この profile は Greek／Canadian_Aboriginal を残し、他の追加 Script と `个`・`开`・`关`・`无`・`网` を対象とする。[設定・用例・加工結果](docs/PRUNING_JA_EN_CODING_V2.md)を参照。
 
 上記の一連の操作は次でも実行できる。run は `outputs/runs/<name>`、モデルは `outputs/models/<name>` に作られる。`--python` の既定は `.venv/bin/python`。
 
