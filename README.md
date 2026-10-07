@@ -23,11 +23,11 @@ sbt --batch ';set Test / javaOptions += "-DvocabSurgery.snapshot=models/models--
 
 この integration test は指定 snapshot の設定・tokenizer・index と全 shard headers を読み取り、系列によらない不変条件（未登録行数、基礎 token の保護、added tokens の残存、削減 byte 数と行数の対応、対象 tensor だけの縮小、書き換え後の ID 範囲）で更新計画を検証する。元ファイルを書き換えず、payload の hash や推論品質は検証しない。
 
-`tokenizers` をインストール済みの Python を test JVM の `vocabSurgery.tokenizersPython` property に追加すると、更新済み tokenizer JSON の参照実装でのロード、10,086 字の NFC 一致、日本語・coding・protocol 入力の round trip も検証する。Python process はネットワークにアクセスせず、一時ファイルは終了時に削除する。参照検証用の Python は repository root の `.venv` に用意できる。
+`tokenizers` をインストール済みの Python を test JVM の `vocabSurgery.tokenizersPython` property に追加すると、更新済み tokenizer JSON の参照実装でのロード、10,086 字の NFC 一致、日本語・coding・protocol 入力の round trip も検証する。Python process はネットワークにアクセスせず、一時ファイルは終了時に削除する。参照検証用の Python は repository root の `.venv` に用意できる。`regex` は `scripts/greek_fragments.py` が Unicode の Script 判定に使う。
 
 ```sh
 uv venv .venv
-uv pip install --python .venv/bin/python tokenizers transformers jinja2
+uv pip install --python .venv/bin/python tokenizers transformers jinja2 regex
 ```
 
 Coder-Next の snapshot では次のように実行する。Flash-Next では snapshot path を置換する。
