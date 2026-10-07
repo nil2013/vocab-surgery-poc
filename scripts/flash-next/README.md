@@ -15,14 +15,16 @@ Flash-Next は oMLX では serve できない。そこで、upstream の TensorF
 | ファイル | 役割 |
 | --- | --- |
 | `setup-tensorfold.sh` | upstream（`https://github.com/ashhart/TensorFold.git`）の `cb2ebf05` を `outputs/tensorfold`（`TF_CLONE` で変更）に取得し、ブランチ `vocab-surgery-ple-token-ids` に patch を `git am` で当て、clone 内に `.venv`（Python 3.13、torch 2.14.1+cu130、editable install）を作る。既存の clone は上書きしない |
-| `tensorfold-patches/` | clone に当てる改造。`ple-token-ids.json`（PLE 対応表）を読み、PLE の hash に元の語彙数と元の ID を使う。同梱の draft 語彙リストを加工後の ID に変換する |
-| `serve.sh` | checkpoint を `--ple-on-ssd --context 65536` で `127.0.0.1:$TF_PORT`（既定 18080）に serve し、ready になったら任意のコマンドを `TF_BASE` 付きで実行し、終了時に止める |
+| `tensorfold-patches/` | clone に当てる改造。`ple-token-ids.json`（PLE 対応表）を読み、PLE の hash に元の語彙数と元の ID を使う。draft 語彙のリスト（TF の `draft_vocab.txt`、または `--draft-vocab` で渡すファイル）を加工後の ID に変換する |
+| `serve.sh` | checkpoint を `--ple-on-ssd --context 65536` で `127.0.0.1:$TF_PORT`（既定 18080）に serve し、ready になったら任意のコマンドを `TF_BASE` 付きで実行し、終了時に止める。`TF_SERVE_ARGS` で serve の引数を足せる（例：`--draft-vocab FILE`） |
 | `evaluate.sh` | run directory に `test-data` の results 以外をコピーし、`testdata-no-exec.patch` を当てて、合成テスト（`--par 1`、`enable_thinking: false`）と `bench.py` を実行する。submodule は変更しない |
 | `testdata-no-exec.patch` | 生成 code の sandbox がない host 向けに、code ケースのコードを記録するだけで実行せず、PASS を `null` にする |
 | `bench.py` | 日本語・英語・Python の 3 prompt を、MTP あり／なし（request の `draft`）で各 4 回、temperature 0、400 tokens で送る。最初の 1 回は warm-up として集計から除く |
+| `draft_vocab.py` | YAML の profile とコーパスから、MTP の draft 語彙のリストを作り直す。行数は基準のリスト（TF の `draft_vocab.txt`）と同じに保ち、コーパスで頻出する token を頻度順に入れ、コーパスで一度も生成されない行を ID の大きい方から落とす。added tokens（`<|im_end|>` など）は落とさない。repository の `.venv`（tokenizers、numpy、pyyaml）で動かす |
+| `draft-vocab/` | `draft_vocab.py` の profile。`corpus-frequent.yaml` は `outputs/test-data-fn` の生成部分から、言語を問わず頻出 token を選ぶ |
 | `acceptance.py` | server log の `accepted=受理数/提案数` を、送った順の結果ファイルと completion tokens で照合して request に割り当て、ケースごとの MTP 受理率を出す。数が合わなければ停止する |
 
-`setup-tensorfold.sh` で作った clone は、patch を当てた後の commit hash まで手元で作った clone（`912415a`、`8afb41b`）と一致する（実機確認）。
+`setup-tensorfold.sh` で作った clone は、patch を当てた後の commit hash まで手元で作った clone（`912415a`、`8afb41b`、`0b77801`）と一致する（実機確認）。
 
 ## 使い方
 
@@ -42,6 +44,15 @@ python3 scripts/flash-next/acceptance.py "$RUN/pruned-v2-server.log" \
 scripts/flash-next/serve.sh "$RUN/coding-pruned-v2-server.log" outputs/models/flash-next-ja-en-coding-v2 \
   sh -c 'python3 scripts/probe_replies.py "$TF_BASE" fn "$0/test-data" scripts/prompts/mixed-ja-coding.json "$0/coding-pruned-v2.jsonl" 1000' "$RUN"
 python3 scripts/flash-next/acceptance.py "$RUN/coding-pruned-v2-server.log" "$RUN/coding-pruned-v2.jsonl"
+```
+
+draft 語彙を作り直して serve するには、次のようにする。
+
+```sh
+.venv/bin/python scripts/flash-next/draft_vocab.py --profile scripts/flash-next/draft-vocab/corpus-frequent.yaml \
+  --tokenizer "$SRC/tokenizer.json" --builtin outputs/tensorfold/src/tensorfold/families/qwen4_exp/cuda/draft_vocab.txt \
+  --model outputs/models/flash-next-ja-en-coding-v4 --out "$RUN/draft.txt"
+TF_SERVE_ARGS="--draft-vocab $PWD/$RUN/draft.txt" scripts/flash-next/evaluate.sh "$RUN" pruned-v4-draft outputs/models/flash-next-ja-en-coding-v4
 ```
 
 server は 1 本ずつ起動・停止する。複数の server を同時に立てたり、request を並列に送ったりすると、`acceptance.py` で log を request に割り当てられない。

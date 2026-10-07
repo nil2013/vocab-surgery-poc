@@ -39,6 +39,10 @@ def flash_next(name):
 
 flash_next_acceptance = flash_next("acceptance")
 flash_next_bench = flash_next("bench")
+try:
+    flash_next_draft_vocab = flash_next("draft_vocab")
+except ImportError:
+    flash_next_draft_vocab = None
 
 
 @contextlib.contextmanager
@@ -349,6 +353,34 @@ class EvaluationTests(unittest.TestCase):
         summary = flash_next_bench.summarize(rows)
         self.assertEqual(summary["ja/mtp"]["decode_tps_median"], 30.0)
         self.assertEqual(len(summary["code/serial"]["completion_tokens"]), flash_next_bench.TRIALS - 1)
+
+    @unittest.skipIf(flash_next_draft_vocab is None, "needs numpy and pyyaml")
+    def test_flash_next_draft_list_keeps_its_rows_and_protected_tokens(self):
+        np = flash_next_draft_vocab.np
+        counts = np.array([5, 0, 0, 0, 9, 3, 0, 1, 7, 0])
+        kept = np.ones(10, bool)
+        kept[6] = False
+        protected = np.zeros(10, bool)
+        protected[3] = True
+        ids, added, dropped = flash_next_draft_vocab.swap(counts, [0, 1, 2, 3, 6], kept, protected, 2)
+        # 6 is not kept, so four rows; 3 is protected, so only 1 and 2 make room, for the two most frequent (4, 8)
+        self.assertEqual(ids.tolist(), [0, 3, 4, 8])
+        self.assertEqual(added.tolist(), [4, 8])
+        self.assertEqual(dropped.tolist(), [1, 2])
+        ids, added, _ = flash_next_draft_vocab.swap(counts, [0, 1, 2, 3], kept, protected, 2, add=[9], remove=[0])
+        self.assertIn(9, ids.tolist())
+        self.assertEqual(len(ids), 4)
+        self.assertNotIn(0, ids.tolist())
+        with self.assertRaises(ValueError):
+            flash_next_draft_vocab.swap(counts, [0, 1, 2, 3], kept, protected, 2, remove=[3])
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / "p.yaml"
+            profile.write_text("corpus:\n  - path: x\n")
+            loaded = flash_next_draft_vocab.load_profile(profile)
+            self.assertEqual((loaded["base"], loaded["select"]["minCount"], loaded["protect"]["addedTokens"]), ("builtin", 2, True))
+            profile.write_text("corpus:\n  - path: x\nreplace:\n  order: random\n")
+            with self.assertRaises(ValueError):
+                flash_next_draft_vocab.load_profile(profile)
 
     @unittest.skipUnless(Path("/usr/bin/sandbox-exec").is_file(), "macOS coding execution only")
     def test_python_fixed_tests_fail_wrong_code_and_deny_writes_outside_temporary_directory(self):

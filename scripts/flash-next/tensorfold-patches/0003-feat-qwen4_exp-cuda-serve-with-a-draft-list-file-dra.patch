@@ -1,0 +1,179 @@
+From 0b7780121ab5b9f586751d5ff61ef754810e2de3 Mon Sep 17 00:00:00 2001
+From: Nil <lue.gsk.2012@gmail.com>
+Date: Wed, 7 Oct 2026 10:55:14 +0900
+Subject: [PATCH] feat(qwen4_exp cuda): serve with a draft list file
+ (--draft-vocab)
+
+The CUDA engine always drafted over the built-in list, which leaves out most
+frequent Japanese tokens. --draft-vocab names a file of upstream token ids
+that replaces it; a vocabulary-pruned checkpoint maps a named list through
+ple-token-ids.json the same way as the built-in one (draft_rows). A row
+count N keeps meaning the rows below N.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011XiGQHTjzpMVa5sTqiQmg5
+---
+ src/tensorfold/cli.py                                |  2 ++
+ src/tensorfold/cli_args.py                           |  3 +++
+ src/tensorfold/families/qwen4_exp/__init__.py        |  9 ++++++---
+ .../families/qwen4_exp/cuda/weight_types.py          | 12 +++++++++++-
+ src/tensorfold/families/qwen4_exp/cuda/weights.py    |  6 ++----
+ src/tensorfold/serve_options.py                      |  9 ++++++++-
+ tests/test_flashnext_ple_token_ids.py                | 12 +++++++++++-
+ 7 files changed, 43 insertions(+), 10 deletions(-)
+
+diff --git a/src/tensorfold/cli.py b/src/tensorfold/cli.py
+index 58121f1..541bdd7 100644
+--- a/src/tensorfold/cli.py
++++ b/src/tensorfold/cli.py
+@@ -260,6 +260,8 @@ def _serve_cuda(args: argparse.Namespace, family: Any, model_dir: Path, context:
+         options["ple_on_ssd"] = True
+     if getattr(args, "mtp_confidence", None) is not None:
+         options["mtp_confidence"] = float(args.mtp_confidence)
++    if getattr(args, "draft_vocab", None):
++        options["draft_vocab"] = str(Path(args.draft_vocab).resolve())
+     if getattr(args, "decode_share", None) is not None:
+         options["decode_share"] = float(args.decode_share)
+     options["context"] = context if context is not None else args.context
+diff --git a/src/tensorfold/cli_args.py b/src/tensorfold/cli_args.py
+index cd4fa5b..94b0c6c 100644
+--- a/src/tensorfold/cli_args.py
++++ b/src/tensorfold/cli_args.py
+@@ -82,6 +82,9 @@ def build_parser(handlers: dict[str, Callable[[argparse.Namespace], int]]) -> ar
+                        help="most MTP drafts a round (Qwen3.8 Flash Next: 3 on Mac; on CUDA 6, stopping under 70%% "
+                             "confidence; Nemotron on CUDA: 15, stopping where a row stops paying; Qwen3.6 MoE on Mac: "
+                             "4, each round's depth, plain included, from measured costs); 0: no MTP drafts")
++    speed.add_argument("--draft-vocab", default=None,
++                       help="on CUDA, a file of upstream token ids the MTP drafts score instead of the family's built-in "
++                            "list (Qwen3.8 Flash Next); a vocabulary-pruned checkpoint maps them through ple-token-ids.json")
+     speed.add_argument("--mtp-confidence", type=float, default=None,
+                        help="on CUDA, stop an MTP chain before a later draft under this probability "
+                             "(Flash Next default 0.70; Nemotron: by the row costs it measures at start)")
+diff --git a/src/tensorfold/families/qwen4_exp/__init__.py b/src/tensorfold/families/qwen4_exp/__init__.py
+index 979582b..1d88c93 100644
+--- a/src/tensorfold/families/qwen4_exp/__init__.py
++++ b/src/tensorfold/families/qwen4_exp/__init__.py
+@@ -170,8 +170,10 @@ CUDA_PREFILL_FP8 = True            # --prefill-fp8: an NVFP4 checkpoint's MXFP8
+ def cuda_engine(model_dir: str | Path, *, drafter: str = "", tp: int = 1, rank: int = 0, master: str = "",
+                 master_port: int = 29551, no_drafts: bool = False, mtp_drafts: int | None = None,
+                 mtp_confidence: float | None = None, context: int | None = None, ple_on_ssd: bool = False,
+-                kv_dtype: str = "bf16", decode_share: float | None = None, **options: Any):
+-    """Verify MTP on one or two CUDA GPUs; start rank 1 first for ``tp=2``, with bf16, int8 or int4 KV storage."""
++                kv_dtype: str = "bf16", decode_share: float | None = None, draft_vocab: str | None = None,
++                **options: Any):
++    """Verify MTP on one or two CUDA GPUs; start rank 1 first for ``tp=2``, with bf16, int8 or int4 KV storage.
++    ``draft_vocab`` is a file of upstream token ids replacing the built-in draft list."""
+ 
+     from tensorfold.cuda import build
+     from tensorfold.cuda.exl3.format import is_exl3
+@@ -194,7 +196,8 @@ def cuda_engine(model_dir: str | Path, *, drafter: str = "", tp: int = 1, rank:
+                          "has one): without it every round would decode one token. Serve a checkpoint with the "
+                          "head, or pass --no-drafts for the serial reference")
+     confidence = CONFIDENCE if mtp_confidence is None else float(mtp_confidence)
+-    return FlashNextEngine(Path(model_dir), depth=depth, confidence=confidence, max_len=context,
++    return FlashNextEngine(Path(model_dir), depth=depth, confidence=confidence, draft_vocab=draft_vocab or "default",
++                           max_len=context,
+                            context_explicit=options.get("context_explicit"), tp=int(tp), rank=int(rank),
+                            master=master, port=int(master_port), streams=max(1, int(options.get("parallel") or 1)),
+                            ple_on_ssd=ple_on_ssd, kv_dtype=kv_dtype,
+diff --git a/src/tensorfold/families/qwen4_exp/cuda/weight_types.py b/src/tensorfold/families/qwen4_exp/cuda/weight_types.py
+index 305abd6..478661c 100644
+--- a/src/tensorfold/families/qwen4_exp/cuda/weight_types.py
++++ b/src/tensorfold/families/qwen4_exp/cuda/weight_types.py
+@@ -292,8 +292,18 @@ def draft_token_ids(draft_vocab: int | str | None) -> np.ndarray | None:
+     return np.unique(np.loadtxt(source, dtype=np.int64).reshape(-1))
+ 
+ 
++def draft_rows(draft_vocab: int | str | None, ple_token_ids: np.ndarray | None) -> np.ndarray | None:
++    """The checkpoint rows the drafts score. A named list ("default" or a file) holds upstream token ids, which a
++    vocabulary-pruned checkpoint maps through ple-token-ids.json; N keeps meaning the rows below N."""
++
++    ids = draft_token_ids(draft_vocab)
++    if ids is not None and isinstance(draft_vocab, str) and ple_token_ids is not None:
++        return pruned_draft_ids(ids, ple_token_ids)
++    return ids
++
++
+ def pruned_draft_ids(upstream: np.ndarray, ple_token_ids: np.ndarray) -> np.ndarray:
+-    """The built-in draft list (upstream token ids) as a vocabulary-pruned checkpoint's rows; pruned tokens drop out."""
++    """A draft list of upstream token ids as a vocabulary-pruned checkpoint's rows; pruned tokens drop out."""
+ 
+     rows = np.searchsorted(ple_token_ids, upstream)
+     found = (rows < len(ple_token_ids)) & (ple_token_ids[np.minimum(rows, len(ple_token_ids) - 1)] == upstream)
+diff --git a/src/tensorfold/families/qwen4_exp/cuda/weights.py b/src/tensorfold/families/qwen4_exp/cuda/weights.py
+index a426f60..e2d3354 100644
+--- a/src/tensorfold/families/qwen4_exp/cuda/weights.py
++++ b/src/tensorfold/families/qwen4_exp/cuda/weights.py
+@@ -14,7 +14,7 @@ from tensorfold.cuda import experts as grouped
+ from .qmm import Q4, dequantize, make_q4, stack_q4
+ from .reader import _DT, _Reader, _groups, _rows, _rows_at, norms_around_one  # noqa: F401
+ from .weight_types import (
+-    AttnW, Config, GDNW, HC, LayerW, MoEW, MTPW, PLEW, Weights, draft_token_ids, pruned_draft_ids, stop_ids)  # noqa: F401 (re-exported)
++    AttnW, Config, GDNW, HC, LayerW, MoEW, MTPW, PLEW, Weights, draft_rows, draft_token_ids, pruned_draft_ids, stop_ids)  # noqa: F401 (re-exported)
+ 
+ 
+ _PLAIN = (torch.bfloat16, torch.float16, torch.float32)
+@@ -417,9 +417,7 @@ def load(model_dir: str | Path, device: str = "cuda", *, mtp: bool = True, tp: t
+             del head_raw
+         # NVFP4: the draft head is the bf16 lm_head's draft rows requantized 4-bit at load (drafts only)
+         draft_head, draft_ids = None, None
+-        ids = draft_token_ids(draft_vocab)
+-        if ids is not None and draft_vocab == "default" and full.ple_token_ids is not None:
+-            ids = pruned_draft_ids(ids, full.ple_token_ids)
++        ids = draft_rows(draft_vocab, full.ple_token_ids)
+         if ids is not None:
+             ids = np.array_split(ids[ids < full.vocab], world)[rank]
+             ids = torch.from_numpy(ids).to(device)
+diff --git a/src/tensorfold/serve_options.py b/src/tensorfold/serve_options.py
+index 3c8d9d0..6bf7b1c 100644
+--- a/src/tensorfold/serve_options.py
++++ b/src/tensorfold/serve_options.py
+@@ -98,10 +98,17 @@ def check(args: argparse.Namespace, family: Any, backend: str, config_dir: Any =
+         if bad:
+             raise ValueError(f"--name-priority names {', '.join(bad)}, not --name or an --alias "
+                              f"({', '.join(sorted(ids))})")
++    engine = getattr(family.package, "cuda_engine", None) if backend == "cuda" else None
++    draft_vocab = getattr(args, "draft_vocab", None)
++    if draft_vocab:
++        if engine is None or "draft_vocab" not in inspect.signature(engine).parameters:
++            raise ValueError(f"--draft-vocab lists the ids a CUDA engine's MTP drafts score; {family.title} on "
++                             f"{'CUDA' if backend == 'cuda' else 'MLX'} has no such list")
++        if not Path(draft_vocab).is_file():
++            raise ValueError(f"--draft-vocab {draft_vocab}: no such file")
+     confidence = getattr(args, "mtp_confidence", None)
+     if confidence is None:
+         return
+-    engine = getattr(family.package, "cuda_engine", None) if backend == "cuda" else None
+     if engine is None or "mtp_confidence" not in inspect.signature(engine).parameters:
+         raise ValueError(f"--mtp-confidence sets where a CUDA engine's MTP chains stop; {family.title} on "
+                          f"{'CUDA' if backend == 'cuda' else 'MLX'} has no such rule")
+diff --git a/tests/test_flashnext_ple_token_ids.py b/tests/test_flashnext_ple_token_ids.py
+index b0c7f5e..2210d52 100644
+--- a/tests/test_flashnext_ple_token_ids.py
++++ b/tests/test_flashnext_ple_token_ids.py
+@@ -7,7 +7,7 @@ import json
+ import numpy as np
+ import pytest
+ 
+-from tensorfold.families.qwen4_exp.cuda.weight_types import Config, ple_token_ids, pruned_draft_ids
++from tensorfold.families.qwen4_exp.cuda.weight_types import Config, draft_rows, ple_token_ids, pruned_draft_ids
+ 
+ 
+ def _write(tmp_path, vocab, eos, table=None):
+@@ -50,3 +50,13 @@ def test_table_must_match_the_rows(tmp_path):
+ def test_builtin_draft_list_maps_to_pruned_rows():
+     kept = np.array([0, 3, 4, 7, 9])
+     assert pruned_draft_ids(np.array([0, 1, 4, 9, 11]), kept).tolist() == [0, 2, 4]
++
++
++def test_a_draft_list_file_maps_like_the_builtin_one(tmp_path):
++    kept = np.array([0, 3, 4, 7, 9])
++    listed = tmp_path / "draft.txt"
++    listed.write_text("9\n1\n4\n0\n11\n")
++    assert draft_rows(str(listed), kept).tolist() == [0, 2, 4]
++    assert draft_rows(str(listed), None).tolist() == [0, 1, 4, 9, 11]
++    assert draft_rows(3, kept).tolist() == [0, 1, 2]
++    assert draft_rows(None, kept) is None
+-- 
+2.43.0
+
