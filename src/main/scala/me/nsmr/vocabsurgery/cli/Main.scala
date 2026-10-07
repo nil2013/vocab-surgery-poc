@@ -132,7 +132,7 @@ object Main:
         opt[Int]("timeout-seconds").action((v, c) => c.copy(sandbox = c.sandbox.copy(timeoutSeconds = v))).validate(v => if v > 0 then success else failure("timeout must be positive")),
         arg[String]("<command>...").unbounded().required().action((v, c) => c.copy(sandbox = c.sandbox.copy(command = c.sandbox.command :+ v)))),
       cmd("serve").action((_, c) => c.copy(command = "serve"))
-        .text("Serve checkpoints with an inference runtime; with a command after --, run it once ready (VOCAB_ENDPOINT, VOCAB_MODELS) and stop").children(
+        .text("Serve checkpoints with an inference runtime; with a command after --, run it once ready (VOCAB_ENDPOINT, VOCAB_MODELS; its output goes to standard error) and stop").children(
         (serveOptions :+ arg[String]("<command>...").unbounded().optional().action((v, c) => c.copy(serve = c.serve.copy(command = c.serve.command :+ v))))*),
       cmd("measure-speed").action((_, c) => c.copy(command = "measure-speed"))
         .text("Serve one checkpoint and measure decode speed, TTFT and, where the runtime reports it, draft acceptance on fixed prompts").children(
@@ -140,7 +140,7 @@ object Main:
           opt[String]("probes").action((v, c) => c.copy(serve = c.serve.copy(probes = Path.of(v)))).text("Speed prompts; default evaluation/speed-prompts.json"),
           opt[String]("out").required().action((v, c) => c.copy(serve = c.serve.copy(output = Some(Path.of(v))))).text("New result JSON under outputs")))*),
       cmd("run-external").action((_, c) => c.copy(command = "run-external"))
-        .text("Serve, then run an external evaluation material's own CLI (after --) with VOCAB_ENDPOINT and VOCAB_MODELS, and record the run").children(
+        .text("Serve, then run an external evaluation material's own CLI (after --) with VOCAB_ENDPOINT and VOCAB_MODELS (its output goes to standard error), and record the run").children(
         (serveOptions ++ Seq(
           opt[String]("material").required().action((v, c) => c.copy(serve = c.serve.copy(material = Path.of(v)))).text("The material's directory; its runner and formats stay its own"),
           opt[String]("copy-to").action((v, c) => c.copy(serve = c.serve.copy(copyTo = Some(Path.of(v))))).text("New directory under outputs to copy the material into and run in"),
@@ -221,7 +221,7 @@ object Main:
             case "run-external" =>
               val arguments = config.serve
               me.nsmr.vocabsurgery.evaluation.ExternalRun.run(arguments.inferenceRuntime, arguments.request,
-                me.nsmr.vocabsurgery.evaluation.ExternalRun(arguments.material, arguments.copyTo, arguments.command), runtime)
+                me.nsmr.vocabsurgery.evaluation.ExternalRun(arguments.material, arguments.copyTo, arguments.command), runtime, err)
             case "draft-vocab" =>
               import me.nsmr.vocabsurgery.runtime.*
               val arguments = config.draft
@@ -254,10 +254,7 @@ object Main:
         while server.alive do Thread.sleep(1000L)
         server.metadata
       else
-        val builder = ProcessBuilder(arguments.command*).inheritIO()
-        builder.environment().put("VOCAB_ENDPOINT", server.endpoint.base.toString)
-        builder.environment().put("VOCAB_MODELS", server.endpoint.models.mkString(","))
-        val code = builder.start().waitFor()
+        val code = EndpointCommand.run(arguments.command, server.endpoint, None, err)
         Json.obj("server" -> server.metadata, "exitCode" -> Json.fromInt(code))
     finally server.close()
 

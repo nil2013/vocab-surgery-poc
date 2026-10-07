@@ -71,7 +71,7 @@ scripts/vocab-surgery serve --runtime tensorfold --model fn=<checkpoint> --serve
 scripts/vocab-surgery measure-speed --runtime tensorfold --model fn=<checkpoint> --server-dir outputs/servers/<new> --out outputs/runs/<run>/speed.json
 ```
 
-- `serve` は `--` の後のコマンドを、ready の後に `VOCAB_ENDPOINT`（`http://127.0.0.1:<port>/v1`）と `VOCAB_MODELS` 付きで実行し、終わったら止める（失敗は終了コード 5）。コマンドがなければ中断されるまで serve する。
+- `serve` は `--` の後のコマンドを、ready の後に `VOCAB_ENDPOINT`（`http://127.0.0.1:<port>/v1`）と `VOCAB_MODELS` 付きで実行し、終わったら止める（失敗は終了コード 5）。コマンドがなければ中断されるまで serve する。コマンドの標準出力と標準エラーは CLI の標準エラーに流し、CLI の標準出力は結果の JSON だけにする（`run-external` も同じ）。
 - `measure-speed` は `evaluation/speed-prompts.json` の prompt を、draft を切り替えられる推論環境では両方のモードで、各 trial 送り、最初の warm-up を除いて decode tok/s、TTFT、生成 token 数の中央値を出す。ログから draft の受理数が取れる推論環境では、送った request と生成 token 数で照合して割り当て、prompt とモードごとの受理率と 1 round あたりの token 数を記録する。
 
 ## 外部の評価素材

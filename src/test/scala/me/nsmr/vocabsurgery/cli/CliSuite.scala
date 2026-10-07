@@ -182,10 +182,12 @@ class CliSuite extends munit.FunSuite:
       def serve(name: String, script: String) = invoke(Vector("serve", "--runtime", "tensorfold", "--tensorfold-clone", clone.toString,
         "--model", s"fn=$checkpoint", "--server-dir", root.resolve(s"outputs/servers/$name").toString,
         "--port", me.nsmr.vocabsurgery.runtime.RuntimeFixtures.freePort().toString, "--", "sh", "-c", script), options)
-      val (code, output, _) = serve("ok", s"echo \"$$VOCAB_ENDPOINT $$VOCAB_MODELS\" > ${root.resolve("seen.txt")}")
+      val (code, output, error) = serve("ok", s"echo \"$$VOCAB_ENDPOINT $$VOCAB_MODELS\" > ${root.resolve("seen.txt")}; echo to-stdout; echo to-stderr >&2")
       assertEquals(code, 0)
       assert(Files.readString(root.resolve("seen.txt")).trim.matches("http://127\\.0\\.0\\.1:\\d+/v1 fn"))
+      // The command's output is diagnostics: standard output carries the result JSON alone.
       assertEquals(io.circe.jawn.parse(output).toOption.get.hcursor.get[Int]("exitCode"), Right(0))
+      assert(error.contains("to-stdout\n") && error.contains("to-stderr\n"), error)
       assertEquals(serve("failing", "exit 3")._1, 5)
       assertEquals(invoke(Vector("serve", "--runtime", "vllm", "--model", "a=b", "--server-dir", "x"))._1, 2)
     finally
@@ -214,8 +216,9 @@ class CliSuite extends munit.FunSuite:
       val material = Files.createDirectories(root.resolve("material"))
       Files.writeString(material.resolve("README.md"), "material\n")
       val (externalCode, externalOutput, externalError) = invoke(Vector("run-external") ++ serving("external") ++ Vector("--material", material.toString,
-        "--copy-to", root.resolve("outputs/runs/material").toString, "--", "sh", "-c", "echo $VOCAB_MODELS > seen.txt"), options)
+        "--copy-to", root.resolve("outputs/runs/material").toString, "--", "sh", "-c", "echo $VOCAB_MODELS > seen.txt; echo material-progress"), options)
       assertEquals(externalCode, 0, externalError)
+      assert(externalError.contains("material-progress\n"), externalError)
       assertEquals(Files.readString(root.resolve("outputs/runs/material/seen.txt")).trim, "fn")
       assert(!Files.exists(material.resolve("seen.txt")))
       assert(Files.isRegularFile(root.resolve("outputs/servers/external/external-run.json")))
