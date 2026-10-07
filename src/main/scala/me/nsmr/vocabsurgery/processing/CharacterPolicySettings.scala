@@ -9,7 +9,7 @@ import me.nsmr.vocabsurgery.tokenizer.*
 import me.nsmr.vocabsurgery.unicode.*
 
 /** Settings for `CharacterPolicy`. `japaneseReference` is the kanji-data directory the Japanese kanji set is built from;
-  * `deletedTokens` names an optional deletion list (see `DeletionList`).
+  * `deletedTokens` names deletion lists (see `DeletionList`); an entry may appear in only one of them.
   * `hanForms` forbids simplified / traditional Han forms selected by `HanFormRule` from Unihan and JMdict judgments.
   */
 final case class CharacterPolicySettings(
@@ -21,11 +21,11 @@ final case class CharacterPolicySettings(
     protectedIds: Set[OriginalTokenId] = Set.empty,
     protectedContents: Set[String] = Set.empty,
     protectMath: Boolean = true,
-    deletedTokens: Option[Path] = None,
+    deletedTokens: Vector[Path] = Vector.empty,
     hanForms: Option[HanFormSettings] = None
 ) extends PolicySettings:
   def kind: PolicyKind = CharacterPolicySettings
-  def inputs: Vector[Path] = (japaneseReference +: deletedTokens.toVector) ++ hanForms.toVector.flatMap(_.inputs)
+  def inputs: Vector[Path] = (japaneseReference +: deletedTokens) ++ hanForms.toVector.flatMap(_.inputs)
   def resolved: CharacterPolicySettings = copy(japaneseReference = japaneseReference.toRealPath(), deletedTokens = deletedTokens.map(_.toRealPath()),
     hanForms = hanForms.map(_.resolved))
 
@@ -36,7 +36,7 @@ final case class CharacterPolicySettings(
 
   def load(): LoadedPolicy =
     val data = KanjiLoader.load(japaneseReference)
-    val deleted = deletedTokens.map(DeletionList.read).getOrElse(Vector.empty)
+    val deleted = DeletionList.readAll(deletedTokens)
     val forms = hanForms.map { settings =>
       val (references, inputs) = HanProfile.load(HanReferencePaths(japaneseReference, settings.unihan, settings.jmdict), Path.of("outputs"))
       val candidates = (references.unihan.simplified.keySet ++ references.unihan.traditional.keySet).toVector.sortBy(_.intValue)
@@ -60,7 +60,8 @@ final case class CharacterPolicySettings(
     "protectedContents" -> Json.fromValues(protectedContents.toVector.sorted.map(Json.fromString)),
     "unregisteredRows" -> Json.fromString("drop"),
     "protectMath" -> Json.fromBoolean(protectMath))
-    .mapObject(fields => deletedTokens.fold(fields)(path => fields.add("deletedTokens", Json.fromString(path.toString))))
+    .mapObject(fields => if deletedTokens.isEmpty then fields
+      else fields.add("deletedTokens", Json.fromValues(deletedTokens.map(path => Json.fromString(path.toString)))))
     .mapObject(fields => hanForms.fold(fields)(settings => fields.add("hanForms", settings.json)))
 
 object CharacterPolicySettings extends PolicyKind:
@@ -83,10 +84,10 @@ object CharacterPolicySettings extends PolicyKind:
       flag("pruneHanOutsideReference"), points("japaneseExtra"), points("explicitForbidden"),
       array("protectedIds").getOrElse(Vector.empty).map(v => OriginalTokenId(JsonFields.int(v, path, "protectedIds"))).toSet,
       array("protectedContents").getOrElse(Vector.empty).map(v => JsonFields.text(v, path, "protectedContents")).toSet,
-      flag("protectMath"), fields("deletedTokens").map(v => Path.of(JsonFields.text(v, path, "deletedTokens"))),
+      flag("protectMath"), array("deletedTokens").getOrElse(Vector.empty).map(v => Path.of(JsonFields.text(v, path, "deletedTokens"))),
       fields("hanForms").map(HanFormSettings.parse(_, path)))
 
-  private final case class Loaded(policy: CharacterPolicy, data: KanjiData, revision: Option[String], deletedTokensSha256: Option[String],
+  private final case class Loaded(policy: CharacterPolicy, data: KanjiData, revision: Option[String], deletedTokensSha256: Vector[String],
       hanForms: Option[HanFormSelection]) extends LoadedPolicy:
     private val reference = policy.japanese
     private def hashes: Json = Json.obj(reference.sourceHashes.toVector.sortBy(_._1).map((name, hash) => name -> Json.fromString(hash))*)
@@ -96,7 +97,8 @@ object CharacterPolicySettings extends PolicyKind:
       "unicode" -> Json.obj("provider" -> Json.fromString(reference.unicode.provider), "providerVersion" -> Json.fromString(reference.unicode.providerVersion),
         "unicodeVersion" -> Json.fromString(reference.unicode.unicodeVersion)),
       "hanDefinition" -> Json.fromString("Script=Han && General_Category=Lo"))
-      .mapObject(fields => deletedTokensSha256.fold(fields)(hash => fields.add("deletedTokensSha256", Json.fromString(hash))))
+      .mapObject(fields => if deletedTokensSha256.isEmpty then fields
+        else fields.add("deletedTokensSha256", Json.fromValues(deletedTokensSha256.map(Json.fromString))))
       .mapObject(fields => hanForms.fold(fields)(selection => fields.add("hanForms", selection.inputs.mapObject(_.remove("kanji").remove("icu")))))
 
     private def variantTokens(analysis: VocabularyAnalysis, reason: ForbiddenReason): Int =

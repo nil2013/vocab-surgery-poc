@@ -79,5 +79,5 @@
   "protectedContents": [],
   "unregisteredRows": "drop",
   "parameterCount": "omit-unverified",
-  "deletedTokens": "policies/greek-fragments-flash-next.txt"
+  "deletedTokens": ["policies/greek-fragments-flash-next.txt"]
 }

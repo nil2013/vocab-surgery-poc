@@ -55,7 +55,7 @@ class ProcessingSuite extends munit.FunSuite:
       .foreach(name => assert(!settings.forbiddenScripts(me.nsmr.vocabsurgery.unicode.UnicodeScript.fromName(name))))
   }
 
-  test("deletion list reads JSON string lines, skips comments and blanks, and rejects duplicates or bare text") {
+  test("deletion lists read JSON string lines, skip comments and blanks, and reject duplicates within or across lists or bare text") {
     val directory = Files.createTempDirectory("vocab-deletion-list-")
     try
       val path = directory.resolve("list.txt")
@@ -65,14 +65,22 @@ class ProcessingSuite extends munit.FunSuite:
         Files.writeString(path, text)
         intercept[DataException](DeletionList.read(path))
       }
+      val other = directory.resolve("other.txt")
+      Files.writeString(other, "\"ab\"\n")
+      Files.writeString(path, "\" yang\"\n")
+      assertEquals(DeletionList.readAll(Vector(path, other)), Vector(" yang", "ab"))
+      Files.writeString(other, "\"ab\"\n\" yang\"\n")
+      intercept[DataException](DeletionList.readAll(Vector(path, other)))
     finally Using.resource(Files.walk(directory))(_.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.foreach(Files.delete))
   }
 
   test("listed tokens are deleted, protected ones kept as conflicts, unmatched entries reported, and list edits invalidate the plan") {
     ProcessingFixtures.withModel { (directory, input, output) =>
       val list = directory.resolve("deleted.txt")
-      Files.writeString(list, "\"ab\"\n\"<tool_call>\"\n\"not-in-this-model\"\n")
-      val policy = PolicyFile(CharacterPolicySettings(deletedTokens = Some(list)))
+      val second = directory.resolve("deleted-protocol.txt")
+      Files.writeString(list, "\"ab\"\n\"not-in-this-model\"\n")
+      Files.writeString(second, "\"<tool_call>\"\n")
+      val policy = PolicyFile(CharacterPolicySettings(deletedTokens = Vector(list, second)))
       assertEquals(PolicyFile.parse(policy.json, Path.of("p.json")), policy)
       val options = ProcessingOptions(outputRoot = output)
       val path = CheckpointProcessor.plan(input, policy, output.resolve("runs/listed"), options)
@@ -88,7 +96,7 @@ class ProcessingSuite extends munit.FunSuite:
       assertEquals(deletion.get[Vector[String]]("unmatchedExamples"), Right(Vector("not-in-this-model")))
       assertEquals(summary.hcursor.downField("rowsAboveMultiple").get[Int]("64"), Right(prepared.domain.projection.compactSize % 64))
       assertEquals(Files.readString(path.getParent.resolve("deletion-list-unmatched.jsonl")), "\"not-in-this-model\"\n")
-      Files.writeString(list, "\"ab\"\n")
+      Files.writeString(second, "\"<tool_call>\"\n\"cd\"\n")
       intercept[DataException](PlanStore.loadVerified(path))
     }
   }
