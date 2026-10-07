@@ -118,6 +118,15 @@ python3 scripts/claude_transcript_cases.py --out outputs/runs/claude-transcript-
 python3 scripts/probe_replies.py http://127.0.0.1:8302/v1 <model> test-data outputs/runs/claude-transcript-cases "$RUN/transcript.jsonl" 800
 ```
 
+## coding-bench-lite の生成
+
+[coding_bench_generate.py](../scripts/coding_bench_generate.py) は、ユーザーの coding-bench-lite（15 問 × Python／Scala／Rust）の出題文を、ベンチマーク自身の `tools/run.py` で組み立て、OpenAI 互換の server に 1 本ずつ送る。生成したコードは実行せず、`ok: null` のまま `run.py` と同じ形式で保存する。採点は sandbox のある環境で `run.py rescore --file` を使う。
+
+```sh
+python3 scripts/coding_bench_generate.py --bench <coding-bench-lite> --base http://127.0.0.1:18080/v1 --model fn \
+  --label pruned-v4 --out "$RUN/pruned-v4.jsonl"
+```
+
 ## Flash-Next
 
 Flash-Next は oMLX ではなく、実験用に改造した TensorFold で serve する。その取得・serve・評価の道具は Flash-Next 専用として [scripts/flash-next](../scripts/flash-next/README.md) にまとめてある。2026-10-07 の比較結果は [Flash-Next の serve 比較](EVALUATION_FLASH_NEXT_20261007.md)。
