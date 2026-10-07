@@ -1,8 +1,8 @@
-# 評価まわりの境界と production code 化の設計（2026-10-07、案）
+# 評価まわりの境界と production code 化の設計（2026-10-07）
 
 `scripts/` に溜まった評価用の Python を整理し、日常的に使うものを Scala の production code にするための設計である。`scripts/` に残すのは sh で書ける程度の近道（CLI の短縮経路）だけにする。`scripts/` の Python は参照実装であり、正規の実装ではない。
 
-この文書は合意前の案であり、実装はまだない。
+境界と棲み分けは 2026-10-07 にユーザーと合意した。段階 1（境界違反の削除）は済み、段階 2 以降は未実装。
 
 ## 1. 境界
 
@@ -10,13 +10,15 @@
 
 | 境界 | こちら側 | 相手側 | またいでよいもの |
 | --- | --- | --- | --- |
-| B1. 外部の評価素材（`test-data` submodule、test-data-fn、coding-bench-lite） | 加工したモデルを serve し、endpoint を用意する | ケースの形式、出題文の組み立て、採点、生成コードの実行とその隔離、指標、runner、集計 | 素材が文書で公開している CLI（`--base`、`--model`、`--label` など）と、素材が書き出す結果ファイル（こちらは置き場所を記録するだけで、中身を解釈しない） |
+| B1. 外部の評価素材（今は `test-data` submodule、test-data-fn、coding-bench-lite。差し替えうる） | 加工したモデルを serve し、endpoint を用意する | ケースの形式、出題文の組み立て、採点、生成コードの実行とその隔離、指標、runner、集計 | 素材が文書で公開している CLI（`--base`、`--model`、`--label` など）と、素材が書き出す結果ファイル（こちらは置き場所を記録するだけで、中身を解釈しない） |
 | B2. 推論環境（oMLX、TensorFold の clone） | 起動、終了、計測の段取り | 推論そのもの | 起動オプション、OpenAI 互換の HTTP API、文書化されたログの行（TF の `done req … accepted=`） |
 | B3. 外部の参照実装（Python） | 結果の判定と記録 | HF tokenizers による tokenizer の独立検証（`check_tokenizer.py`）、MLX による logits の比較（`logits.py`） | 引数と JSON の入出力（今の `ExternalTools` と同じ） |
 | B4. モデル系列・推論環境に固有の部分 | 共通の操作 | 系列ごと（`ModelFamily`）、推論環境ごとの実装 | trait のメソッド |
 | B5. production code と `scripts/` | Scala の型・操作・CLI | sh の近道 | CLI の呼び出しだけ |
 
 外部の素材に足りない機能（Linux での生成コードの隔離実行、生成だけを行うモード、結果の出力先の指定など）は、こちらで patch したり取り込んだりせず、素材の側への変更案として 6 節にまとめる。
+
+test-data の submodule は差し替える可能性が高い。特定の素材のパス、ファイル名、ケースの形式を、production code・テスト・手順の文書に埋め込まない。どの素材を使うかは実行のたびに引数で与える。
 
 ## 2. 現状の棚卸しと行き先
 
@@ -114,8 +116,18 @@
   - 生成だけを行うモードと、保存した出力の採点（`rescore`）を、隔離して実行する手段。
   - Linux での隔離実行。
 
-## 7. 決めておくこと
+## 7. 決めたこと（2026-10-07）
 
-- draft 語彙の profile の形式：YAML のまま、Scala に YAML のライブラリを足すか、JSON に変えるか。
-- 自前の固定 suite（`evaluation/default-suite.jsonl` と `outputs/SPEC.md` のゲート）の扱い。この案では、このプロジェクトの受け入れ基準なのでこちら側に置いた。外部の評価素材と同じく別の素材として切り出すべきかは判断が要る。
-- chat template を適用した tokenization の計測。この案では B3 の参照実装（Python）に残した。Scala の側で template を扱う実装を持つかどうか。
+- draft 語彙の profile は JSON にする（既存の Circe で読める。YAML のライブラリは足さない）。profile は規則だけを持ち、コーパスは引数で渡す。
+- 自前の固定 suite（`evaluation/default-suite.jsonl` と `outputs/SPEC.md` のゲート）は、このプロジェクトの受け入れ基準としてこちら側に置く。
+- chat template を適用した tokenization の計測は、B3 の参照実装（Python）に残す。
+- Python が不可欠な箇所（HF tokenizers、transformers、MLX）は Python のまま残す。
+
+## 8. 段階 1 の結果
+
+2 節で「B1 違反」としたファイル（`evaluate_testdata.py`、test-data の runner への patch、`coding_bench_generate.py`、`coding_bench_score.py`、`probe_replies.py` と依頼文、`claude_transcript_cases.py`、`flash-next/evaluate.sh`）と、一度きりの `greek_fragments.py` を削除した。最後に含まれるコミットは `f163c9b`。
+
+- `flash-next/bench.py` は、test-data の通信部分の import をやめ、自前の最小の client を持つ。
+- `flash-next/acceptance.py` は、test-data の結果の形式を読まず、このプロジェクトが送った request の記録とだけ照合する。
+- `flash-next/draft_vocab.py` は、評価素材のケースファイルを読まず、中立のコーパス（`{"text": …}` の JSONL）と JSON の profile を読む。
+- AGENTS.md と評価の手順の文書から、特定の素材のパスとケースの形式を外した。過去のレポートは記録として残し、当時のスクリプトの在りかを書き添えた。

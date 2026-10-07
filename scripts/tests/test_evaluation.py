@@ -19,14 +19,7 @@ sys.path.insert(0, str(SCRIPTS))
 import evaluate
 import logits
 import code_checks
-import evaluate_testdata
 import check_tokenizer
-try:
-    import greek_fragments
-except ImportError:
-    greek_fragments = None
-import claude_transcript_cases
-import probe_replies
 import sandbox
 
 spec = importlib.util.spec_from_file_location("make_suite", SCRIPTS / "make-suite.py")
@@ -145,7 +138,7 @@ class EvaluationTests(unittest.TestCase):
             result = evaluate.Omlx(url).stream("model", next(row for row in make_suite.cases() if row["category"] == "tool"))
             self.assertEqual(json.loads(result["toolCalls"][0]["function"]["arguments"]), {"a": 2, "b": 3})
 
-    def test_stream_preserves_testdata_sampling_and_tool_choice(self):
+    def test_stream_preserves_explicit_sampling_and_tool_choice(self):
         case = next(row for row in make_suite.cases() if row["category"] == "tool")
         with fake_server(response()) as (url, server):
             evaluate.Omlx(url).stream("model", case, temperature=.7, seed=1, top_p=.8, tool_choice="none")
@@ -173,72 +166,6 @@ class EvaluationTests(unittest.TestCase):
                 client.load("pruned", settle_seconds=settle)
             sleep.assert_not_called()
             error.close()
-
-    @unittest.skipUnless(Path("test-data/cases/synthetic/suite.json").is_file(), "test-data submodule required")
-    def test_testdata_inputs_and_fixed_scoring_contract(self):
-        suite, replay, checks, metrics = evaluate_testdata.load_data(Path("test-data"))
-        self.assertEqual((len(suite["tests"]), len(replay)), (26, 35))
-        self.assertEqual(set(checks), {"lru", "count_by_year"})
-        cases = {case["id"]: case for case in suite["tests"]}
-        for identifier in ["verbatim_ja", "echo_greek_math"]:
-            expected = cases[identifier]["expect"]
-            self.assertTrue(evaluate_testdata.score_synthetic(cases[identifier], {"text": expected}, checks)["passed"])
-            self.assertFalse(evaluate_testdata.score_synthetic(cases[identifier], {"text": "wrong"}, checks)["passed"])
-        self.assertTrue(evaluate_testdata.score_synthetic(cases["translate_in_ko"], {"text": "会議は3時。資料を共有。"}, checks)["passed"])
-        self.assertFalse(evaluate_testdata.score_synthetic(cases["translate_in_ko"], {"text": "会議は3時。"}, checks)["passed"])
-        self.assertEqual(metrics("日本語ع", "ع")["leak"], 0)
-        self.assertEqual(metrics("日本語ع", "")["leak"], 1)
-
-    def test_testdata_pairs_require_matched_coverage_and_keep_nonconcluded_outputs_separate(self):
-        row = {"id": "case", "sample": 0, "group": "replay", "response": {"text": "日本語", "finishReason": "stop"},
-               "metrics": {"lang": "ja", "leak": 0}}
-        changed = {**row, "response": {"text": "中国語", "finishReason": "tool_calls"}}
-        pairs = evaluate_testdata.paired_changes([row], [changed])
-        self.assertFalse(pairs[0]["textIdentical"])
-        self.assertEqual(pairs[0]["firstScalarDifference"], 0)
-        self.assertEqual(evaluate_testdata.summarize_phase([row, changed])["replayConcluded"], 1)
-        for after in [[], [{**changed, "sample": 1}]]:
-            with self.assertRaises(ValueError):
-                evaluate_testdata.paired_changes([row], after)
-
-    def test_testdata_template_parses_argument_strings_without_changing_api_input(self):
-        messages = [{"role": "assistant", "content": None, "tool_calls": [
-            {"function": {"name": "read_file", "arguments": '{"path":"設定.py"}'}}]}]
-        normalized = evaluate_testdata.template_messages(messages)
-        self.assertEqual(normalized[0]["tool_calls"][0]["function"]["arguments"], {"path": "設定.py"})
-        self.assertIsInstance(messages[0]["tool_calls"][0]["function"]["arguments"], str)
-        self.assertEqual(evaluate_testdata.template_messages(normalized), normalized)
-        for arguments in ["[]", "not-json"]:
-            messages[0]["tool_calls"][0]["function"]["arguments"] = arguments
-            with self.assertRaises(ValueError):
-                evaluate_testdata.template_messages(messages)
-
-    def test_baseline_reuse_requires_full_coverage_and_matching_provenance(self):
-        keys = ["source", "pruned", "manifestSha256", "testDataRevision", "inputHashes", "server", "packageVersions",
-                "replaySamples", "benchmarkTrials", "benchmarkWarmups", "concurrency"]
-        environment = {key: "same" for key in keys}
-        expected = [("synthetic", "case", 0)]
-        rows = [{"group": "synthetic", "id": "case", "sample": 0}]
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            (directory / "environment.json").write_text(json.dumps(environment))
-            (directory / "baseline.jsonl").write_text(json.dumps(rows[0]) + "\n")
-            (directory / "benchmark-cases.json").write_text("[]")
-            self.assertEqual(evaluate_testdata.load_baseline(directory, environment, expected, []), rows)
-            with self.assertRaises(ValueError):
-                evaluate_testdata.load_baseline(directory, {**environment, "manifestSha256": "different"}, expected, [])
-            with self.assertRaises(ValueError):
-                evaluate_testdata.load_baseline(directory, environment, expected * 2, [])
-            with self.assertRaises(ValueError):
-                evaluate_testdata.load_baseline(directory, environment, expected, [{"id": "changed"}])
-
-    @unittest.skipUnless(Path("test-data/cases/synthetic/suite.json").is_file() and SANDBOX, "test-data and a sandbox required")
-    def test_testdata_fixed_python_harness_runs_restricted_and_fails_wrong_code(self):
-        suite, _, checks, _ = evaluate_testdata.load_data(Path("test-data"))
-        case = next(case for case in suite["tests"] if case["id"] == "code_count_by_year")
-        code = "import datetime\ndef count_by_year(dates):\n result = {}\n for text in dates:\n  try:\n   year = datetime.date.fromisoformat(text).year\n  except ValueError:\n   continue\n  result[year] = result.get(year, 0) + 1\n return result\n"
-        self.assertTrue(evaluate_testdata.score_synthetic(case, {"text": "```python\n" + code + "```"}, checks)["passed"])
-        self.assertFalse(evaluate_testdata.score_synthetic(case, {"text": "```python\ndef count_by_year(dates): return {}\n```"}, checks)["passed"])
 
     def test_logit_gate_preserves_thresholds_and_rejects_bad_vectors(self):
         self.assertTrue(logits.compare([1.0, 2.0], [1.0, 2.001])["passed"])
@@ -292,12 +219,6 @@ class EvaluationTests(unittest.TestCase):
         self.assertNotEqual(process.returncode, 0)
         self.assertIn("assertions enabled", process.stderr)
 
-    @unittest.skipIf(greek_fragments is None, "needs the regex module")
-    def test_greek_fragments_keep_single_letters_and_unaccented_pairs(self):
-        rows = [{"compactId": i, "surface": s, "protection": []} for i, s in enumerate(["α", " μ", "ου", "εί", "τικ", " προ", "abc"])]
-        rows += [{"compactId": None, "surface": "ται", "protection": []}, {"compactId": 9, "surface": "ουν", "protection": ["policy_math"]}]
-        self.assertEqual(sorted(greek_fragments.fragments(json.dumps(r) for r in rows)), [" προ", "εί", "τικ"])
-
     def test_reference_files_follow_rows_slow_tokenizer_files_and_ple_token_ids(self):
         with tempfile.TemporaryDirectory() as root:
             source, model = Path(root, "source"), Path(root, "model")
@@ -341,21 +262,16 @@ class EvaluationTests(unittest.TestCase):
             return (f"[tensorfold] done req-1 prompt=9 cached=0 thinking=False tokens={tokens} sha=0 finish=stop "
                     f"tok/s=50.0 ttft=0.1s prefill=0.1s rounds={rounds} accepted={accepted}/{proposed}")
         usage = lambda n: {"usage": {"completion_tokens": n}}
-        synthetic = {"results": [{"id": "tool", "response": usage(4), "followup": usage(2)},
-                                 {"id": "leak", "samples": [usage(6), usage(8)]}]}
         bench = {"rows": [{"prompt": "ja", "draft": True, "trial": 0, "completion_tokens": 5},
                           {"prompt": "ja", "draft": False, "trial": 0, "completion_tokens": 5}]}
-        probe = [{"case": "ko_fix", "setting": "t0", **usage(3)}]
-        sent = (list(flash_next_acceptance.synthetic_requests(synthetic)) + list(flash_next_acceptance.bench_requests(bench))
-                + list(flash_next_acceptance.probe_requests(probe)))
-        self.assertEqual([name for _, name, _ in sent],
-                         ["tool", "tool/followup", "leak#0", "leak#1", "bench:ja/mtp#0", "bench:ja/serial#0", "ko_fix/t0"])
-        logged = flash_next_acceptance.log_requests(["noise", line(4, 2, 2, 3), line(2, 1, 1, 1), line(6, 4, 2, 6), line(8, 4, 4, 6),
-                                             line(5, 2, 3, 3), line(5, 5, 0, 0), line(3, 1, 2, 2)])
+        records = [{"case": "leak", "setting": "t0", **usage(6)}, {"case": "leak", "setting": "t1", **usage(8)}]
+        sent = list(flash_next_acceptance.bench_requests(bench)) + list(flash_next_acceptance.record_requests(records))
+        self.assertEqual([name for _, name, _ in sent], ["bench:ja/mtp#0", "bench:ja/serial#0", "leak/t0", "leak/t1"])
+        logged = flash_next_acceptance.log_requests(["noise", line(5, 2, 3, 3), line(5, 5, 0, 0), line(6, 4, 2, 6), line(8, 4, 4, 6)])
         totals = flash_next_acceptance.totals(flash_next_acceptance.attribute(logged, sent))
         self.assertEqual(totals["leak"]["accepted"], 6)
         self.assertEqual(totals["leak"]["proposed"], 12)
-        self.assertEqual(totals["tool"]["tokensPerRound"], 2.0)
+        self.assertEqual(totals["bench:ja/mtp"]["tokensPerRound"], 2.5)
         self.assertNotIn("bench:ja/serial", totals)
         with self.assertRaises(ValueError):
             flash_next_acceptance.attribute(logged[:-1], sent)
@@ -369,7 +285,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(summary["ja/mtp"]["decode_tps_median"], 30.0)
         self.assertEqual(len(summary["code/serial"]["completion_tokens"]), flash_next_bench.TRIALS - 1)
 
-    @unittest.skipIf(flash_next_draft_vocab is None, "needs numpy and pyyaml")
+    @unittest.skipIf(flash_next_draft_vocab is None, "needs numpy")
     def test_flash_next_draft_list_keeps_its_rows_and_protected_tokens(self):
         np = flash_next_draft_vocab.np
         counts = np.array([5, 0, 0, 0, 9, 3, 0, 1, 7, 0])
@@ -389,43 +305,19 @@ class EvaluationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             flash_next_draft_vocab.swap(counts, [0, 1, 2, 3], kept, protected, 2, remove=[3])
         with tempfile.TemporaryDirectory() as directory:
-            profile = Path(directory) / "p.yaml"
-            profile.write_text("corpus:\n  - path: x\n")
+            profile = Path(directory) / "p.json"
+            profile.write_text("{}")
             loaded = flash_next_draft_vocab.load_profile(profile)
             self.assertEqual((loaded["base"], loaded["select"]["minCount"], loaded["protect"]["addedTokens"]), ("builtin", 2, True))
-            profile.write_text("corpus:\n  - path: x\nreplace:\n  order: random\n")
+            profile.write_text('{"replace": {"order": "random"}}')
             with self.assertRaises(ValueError):
                 flash_next_draft_vocab.load_profile(profile)
-
-    def test_transcript_cases_start_at_typed_requests_and_cut_after_tool_results(self):
-        rec = lambda kind, content, **extra: json.dumps({"type": kind, "message": {"role": kind, "content": content, **extra}})
-        lines = [rec("user", "<local-command-caveat>x</local-command-caveat>"),
-                 rec("user", "ファイルを読んで"),
-                 rec("assistant", [{"type": "thinking", "thinking": ""}], id="m1"),
-                 rec("assistant", [{"type": "text", "text": "読みます"}], id="m1"),
-                 rec("assistant", [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "a.py"}}], id="m1"),
-                 rec("user", [{"type": "tool_result", "tool_use_id": "t1", "content": "print(1)" * 10}]),
-                 rec("assistant", [{"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "ls"}}], id="m2"),
-                 rec("user", [{"type": "tool_result", "tool_use_id": "t2", "content": [{"type": "text", "text": "a.py"}]}]),
-                 rec("user", "[Request interrupted by user]"),
-                 rec("user", "ありがとう")]
-        evs = claude_transcript_cases.events(lines)
-        self.assertEqual(claude_transcript_cases.candidates(evs), [(0, 2)])
-        messages = claude_transcript_cases.case_messages(evs, 0, 1, 20)
-        self.assertEqual([m["role"] for m in messages], ["system", "user", "assistant", "tool"])
-        self.assertEqual(messages[2]["content"], "読みます")
-        self.assertEqual(json.loads(messages[2]["tool_calls"][0]["function"]["arguments"]), {"file_path": "a.py"})
-        self.assertTrue(messages[3]["content"].endswith("[... 60 more characters]"))
-        tools = claude_transcript_cases.tool_definitions(claude_transcript_cases.case_messages(evs, 0, 2, 100))
-        self.assertEqual([t["function"]["name"] for t in tools], ["Bash", "Read"])
-        self.assertEqual(list(tools[1]["function"]["parameters"]["properties"]), ["file_path"])
-        with tempfile.TemporaryDirectory() as directory:
-            case_dir = Path(directory) / "cases" / "replay"
-            case_dir.mkdir(parents=True)
-            (case_dir / "cc_00.json").write_text(json.dumps({"id": "cc_00", "request": {"messages": messages, "tools": tools}}))
-            name, shown, sent, sent_tools = next(probe_replies.requests(directory))
-            self.assertEqual((name, shown, len(sent), len(sent_tools)), ("cc_00", "ファイルを読んで", 4, 2))
-            self.assertIn("a.py", probe_replies.context_text(sent))
+            corpus = Path(directory) / "c.jsonl"
+            corpus.write_text('{"text": "a"}\n\n{"text": "a"}\n{"text": "b"}\n')
+            self.assertEqual(flash_next_draft_vocab.corpus_texts([corpus]), ["a", "b"])
+            corpus.write_text('{"body": "a"}\n')
+            with self.assertRaises(ValueError):
+                flash_next_draft_vocab.corpus_texts([corpus])
 
     def test_sandbox_platform_picks_an_available_implementation_and_never_runs_unconfined(self):
         class Fake(sandbox.Sandbox):

@@ -11,7 +11,7 @@ Purpose: vocabulary and embedding / LM-head pruning of MLX safetensors checkpoin
 - Keep tools that serve or evaluate one specific model under `scripts/<model>/` with its own README (Flash-Next: [scripts/flash-next](scripts/flash-next/README.md)); the top level of `scripts/` holds model-independent helpers only.
 - Use [docs/PROCESSING.md](docs/PROCESSING.md) for saved plans, input inventories, output boundaries, staging, publication, or full checkpoint verification.
 - Use [docs/EVALUATION.md](docs/EVALUATION.md) for oMLX helpers, fixed suites, metrics, code execution, or evaluation conclusions. Keep a failed logits gate and pending human ratings visible; do not infer TASK completion from a successful command.
-- Use [test-data/docs/cases.md](test-data/docs/cases.md) and [test-data/docs/metrics.md](test-data/docs/metrics.md) when changing replay / synthetic case adapters or interpreting their scores.
+- Use [docs/EVALUATION_ARCHITECTURE.md](docs/EVALUATION_ARCHITECTURE.md) for the boundaries between this project, external evaluation materials, inference runtimes and Python reference implementations, and for moving evaluation helpers into Scala.
 - Use [docs/PRUNING_JA_EN_CODING_V2.md](docs/PRUNING_JA_EN_CODING_V2.md) when changing `policies/ja-en-coding-v2.json` or its Math / manual-Han decisions.
 - Use [outputs/SPEC.md](outputs/SPEC.md) when changing surgery requirements or acceptance criteria. Distinguish agreed requirements from initial proposed thresholds.
 - Use [kanji-data/README.md](kanji-data/README.md) when changing which reference files or fields are consumed.
@@ -20,7 +20,7 @@ Purpose: vocabulary and embedding / LM-head pruning of MLX safetensors checkpoin
 
 - `models` links to the Hugging Face cache. Keep snapshots and symlink targets read-only; write generated models and analysis to `outputs`, without hard links to inputs.
 - `kanji-data` is an upstream submodule. Loader changes must not incidentally edit its data or advance its revision. Initialize it when needed: `git submodule update --init kanji-data`.
-- `test-data` is an upstream evaluation submodule; keep cases and its revision unchanged during evaluation. Its runners write into the submodule; use `scripts/evaluate_testdata.py` to save comparisons under `outputs`. Initialize it when needed: `git submodule update --init test-data`.
+- External evaluation materials (currently the `test-data` submodule; it may be replaced) own their cases, prompts, scoring, code execution and runners. Serve a model and call a material's documented CLI with the endpoint; never import, patch or reimplement its internals, and do not hard-code a material's paths or formats. Keep the submodule and its revision unchanged; copy it into a run directory when its runner writes into itself.
 - `outputs/SPEC.md` is tracked documentation. Other generated outputs, `target/` directories, and IDE / Scala caches are ignored artifacts; do not hand-edit or commit them.
 
 ## Data and architecture constraints

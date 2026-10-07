@@ -2,7 +2,7 @@
 """Attribute the experimental TensorFold server's per-request MTP statistics to the requests that produced them.
 
 The server logs one `done req-… tokens=N … rounds=R accepted=A/P` line per request. Requests must have been sent one at a
-time; the result files are given in the order they were sent (synthetic results JSON, bench.py JSON, scripts/probe_replies.py JSONL) and
+time; this project's own records are given in the order they were sent (bench.py JSON, or JSONL rows with case, setting and usage) and
 every request's completion-token count must match its log line.
 Usage: acceptance.py <server log> <result file>... [--json <new output.json>]
 """
@@ -25,33 +25,23 @@ def log_requests(lines):
     return rows
 
 
-def synthetic_requests(result):
-    """Requests of a run_synthetic.py result in sending order: response, tool follow-up, then samples."""
-    for case in result["results"]:
-        if case.get("response"):
-            yield case["id"], case["id"], case["response"]
-        if case.get("followup"):
-            yield case["id"], f"{case['id']}/followup", case["followup"]
-        for index, sample in enumerate(case.get("samples", [])):
-            yield case["id"], f"{case['id']}#{index}", sample
-
-
 def bench_requests(result):
     for row in result["rows"]:
         name = f"bench:{row['prompt']}/{'mtp' if row['draft'] else 'serial'}"
         yield name, f"{name}#{row['trial']}", {"usage": {"completion_tokens": row["completion_tokens"]}}
 
 
-def probe_requests(rows):
+def record_requests(rows):
+    """Request records of this project's own runs: `case`, `setting` and the response `usage`."""
     for row in rows:
         yield row["case"], f"{row['case']}/{row['setting']}", row
 
 
 def requests(path):
     if path.suffix == ".jsonl":
-        return list(probe_requests(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line))
+        return list(record_requests(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line))
     result = json.loads(path.read_text(encoding="utf-8"))
-    return list(bench_requests(result) if "rows" in result else synthetic_requests(result))
+    return list(bench_requests(result))
 
 
 def attribute(logged, sent):

@@ -73,67 +73,14 @@ evaluation directory に suite、forbidden scalars、tokenization、logits、bas
   --ratings outputs/reviews/my-first-run-ratings.json --out "$RUN/reviewed-metrics.json"
 ```
 
-## test-data の同条件比較
+## 外部の評価素材
 
-`test-data` は独立した upstream submodule。ケースの定義と近似は [cases.md](../test-data/docs/cases.md)、採点の意味は [metrics.md](../test-data/docs/metrics.md) を参照する。既存の履歴出力や別ホストの測定を baseline に使わず、元モデルと加工モデルに同じ固定入力・sampling パラメータを送り直す。
+`test-data` submodule などの外部の評価素材は、ケースの形式、出題文の組み立て、採点、生成コードの実行、指標、runner を自分で持つ。このプロジェクトは、加工したモデルを serve して endpoint を用意し、素材が文書で公開している CLI にその endpoint を渡して実行するだけにする。素材の内部（runner、`tools/` のモジュール、ケースの形式）を import・patch・再実装しない。どの素材を使うかは実行のたびに与え、特定の素材のパスやケースの形式を手順やコードに埋め込まない（素材は差し替えうる）。境界の詳細は [EVALUATION_ARCHITECTURE.md](EVALUATION_ARCHITECTURE.md) を参照する。
 
-[evaluate_testdata.py](../scripts/evaluate_testdata.py) は、合成26ケース（seed 展開後38リクエスト）、replay35ケース、既存 suite の速度測定6ケースを比較する。replay は既定で各2 samples、temperature .7、top_p .8、seed 0 / 1、max_tokens 4000。合成テストは入力に指定されたパラメータを保持し、top_p 未指定なら request でも省略する。速度は greedy、warm-up 1回・測定5回、同時実行1、prefix cache 無効で測定する。
+- 素材の runner が素材の中に結果を書く場合は、素材を run directory に複製してから実行し、元の submodule と revision を変えない。
+- 素材に足りない機能（Linux での生成コードの隔離実行など）は、素材の側への変更案にする。
 
-先に `verify` を実行し、成功 report を渡す。専用 server の起動は前節と同じ。以下の出力先は例で、再実行時は新しい directory にする。
-
-```sh
-RUN=outputs/runs/ja-en-coding-v2
-EVAL_PYTHON=/opt/homebrew/Cellar/omlx/0.7.0rc1/libexec/bin/python3.11
-scripts/vocab-surgery verify --manifest "$RUN/manifest.json" --python "$EVAL_PYTHON" \
-  --report "$RUN/testdata-verification.json"
-"$EVAL_PYTHON" scripts/logits.py compare --manifest "$RUN/manifest.json" --output "$RUN/testdata-logits"
-"$EVAL_PYTHON" scripts/serve-evaluation.py --manifest "$RUN/manifest.json" \
-  --server-dir outputs/servers/testdata-comparison --port 8302
-"$EVAL_PYTHON" scripts/evaluate_testdata.py --manifest "$RUN/manifest.json" \
-  --verification-report "$RUN/testdata-verification.json" \
-  --server-environment outputs/servers/testdata-comparison/server.json \
-  --test-data test-data --output "$RUN/testdata-comparison"
-```
-
-`logits.py` の比較と teacher-forced 速度測定中は、server にモデルをロードせず、hash 検証や別の benchmark を同時に実行しない。oMLX の比較も baseline → unload → pruned → unload の順で行う。native decode tok/s と TTFT、scalar/s を保存し、入力長・生成内容の異なる replay の速度を、そのまま一つの性能値にまとめない。
-
-helper はケースと hash、submodule revision、server・package情報、全応答、tokenization、同じ case / seed の変化、集計を `outputs` に保存する。upstream の runner は submodule 内の `results` を更新するため、この比較では使わない。合成テストの固定 Python harness は upstream から読み、[既存の sandbox](../scripts/code_checks.py) 内で実行する。replay の tool calls は記録するだけで、モデルが指示した操作を実行しない。合成 tool test のみ固定の結果を返す。
-
-ローカルの tokenization 検査では、履歴の tool arguments の JSON strings を object にしたコピーを template に渡す。oMLX 側も request を template に渡す前にこの変換を行う。元ケースと API に送る履歴は変更しない。
-
-この tokenization は HF 参照 template の解析であり、oMLX の追加の前処理によって native usage の入力数と異なる場合がある。実際の入力数・速度には各応答の native usage を使い、参照解析で一致した IDs を API が返した raw IDs として扱わない。
-
-`test-data` の leak は JIS X 0213 / Python Unicode と文脈内文字の除外による指標であり、surgery の ICU policy predicate とは別である。replay は `stop` かつ text がある応答だけを concluded として言語・混入を集計し、`tool_calls` / `length` を別に数える。合成の PASS は指定の文字一致・keywords・code harness 等の判定で、日本語品質の人による評価を代替しない。失敗時は部分 JSONL を保持して停止し、新しい出力先で再実行する。
-
-モデル切替直後に oMLX の dynamic memory ceiling が旧状況を参照して HTTP 507 を返す場合、明示 load を最大20秒、1秒間隔で再試行する。他の HTTP errors は再試行せず、memory guard の上限は変更しない。完了した baseline の後に失敗した場合は、新しい出力先で `--baseline-results <旧 comparison directory>` を指定できる。モデル・manifest hash・データ revision / hashes・server 情報・package versions・samples / trials / warmups が一致し、全 baseline 行の case / seed / group が揃っている場合だけコピーして再利用し、そのファイル hash と出所を記録する。部分 baseline は再利用しない。
-
-## 混在した入力への応答の記録
-
-[probe_replies.py](../scripts/probe_replies.py) は、OpenAI 互換の任意の server に固定の prompt 集合を temperature 0 と 0.7（seed 1、2）で 1 本ずつ送り、応答と test-data の混入指標を JSONL に保存する。prompt にある字を写したもの（`copied`）と、prompt にない混入（`novel`）を分けて記録する。生成 code は実行しない。
-
-- [mixed-ja.json](../scripts/prompts/mixed-ja.json)：日本語の一部を簡体字・ハングルに置き換えた依頼
-- [mixed-ja-coding.json](../scripts/prompts/mixed-ja-coding.json)：同じ置き換えをした簡単な Python の課題
-
-```sh
-python3 scripts/probe_replies.py http://127.0.0.1:8302/v1 <model> test-data scripts/prompts/mixed-ja.json "$RUN/mixed.jsonl"
-```
-
-prompts ファイルの代わりに replay ケースの directory（`<dir>/cases/replay/*.json`、`request.messages` と `request.tools` を持つもの）も渡せる。[claude_transcript_cases.py](../scripts/claude_transcript_cases.py) は、手元の Claude Code の transcript（既定は `~/.claude/projects` の下を自動で探索）から、ユーザーが入力した依頼と、それに続く tool call と結果の数件までを切り出して、この形式のケースにする。切り出す位置は seed から再現できるランダムな選択。ケースはユーザー自身の会話なので、`outputs` の下に書き、コミットしない。
-
-```sh
-python3 scripts/claude_transcript_cases.py --out outputs/runs/claude-transcript-cases --count 3 --seed 0
-python3 scripts/probe_replies.py http://127.0.0.1:8302/v1 <model> test-data outputs/runs/claude-transcript-cases "$RUN/transcript.jsonl" 800
-```
-
-## coding-bench-lite の生成
-
-[coding_bench_generate.py](../scripts/coding_bench_generate.py) は、ユーザーの coding-bench-lite（15 問 × Python／Scala／Rust）の出題文を、ベンチマーク自身の `tools/run.py` で組み立て、OpenAI 互換の server に 1 本ずつ送る。生成したコードは実行せず、`ok: null` のまま `run.py` と同じ形式で保存する。[coding_bench_score.py](../scripts/coding_bench_score.py) は、ベンチマークの `run_tests` に sandbox を通す subprocess を渡して採点し、新しいファイルに書く。python3、rustc（rustup の home）、scala-cli（JDK と Coursier の cache）を読み取り専用で mount し、scala-cli は Bloop の build server を使わずに compile する。
-
-```sh
-python3 scripts/coding_bench_generate.py --bench <coding-bench-lite> --base http://127.0.0.1:18080/v1 --model fn \
-  --label pruned-v4 --out "$RUN/pruned-v4.jsonl"
-python3 scripts/coding_bench_score.py --bench <coding-bench-lite> --results "$RUN/pruned-v4.jsonl" --out "$RUN/pruned-v4-scored.jsonl"
-```
+2026-10-06 の test-data の比較（[測定結果と限界](EVALUATION_TESTDATA_20261006.md)）と、2026-10-07 の Flash-Next の評価の一部は、素材の内部を取り込んでいた helper で行った。その helper は境界違反として削除した（最後に含まれるのは `f163c9b`）。
 
 ## Flash-Next
 

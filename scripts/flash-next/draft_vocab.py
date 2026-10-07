@@ -1,80 +1,56 @@
 #!/usr/bin/env python3
-"""Rebuild TensorFold's Flash-Next MTP draft list from a YAML profile and a corpus, keeping its number of rows.
+"""Rebuild TensorFold's Flash-Next MTP draft list from a JSON profile and a corpus, keeping its number of rows.
 
-The profile names the base list, the corpus (replay cases of test-data directories: assistant text, reasoning and
-tool arguments in each history plus the reference), which tokens may enter (generated at least `minCount` times,
-most frequent first, in any language), which base rows they replace (rows the corpus never generates, highest token
-id first: BPE merges them last), what never leaves (added tokens such as <|im_end|>), and explicit additions and
-removals. With --model, only the tokens that checkpoint keeps count, so the list scores as many of its rows as the
-base does. The output holds sorted upstream token ids, one per line, as `tensorfold serve --draft-vocab` expects.
+The profile holds the rules only: the base list, which tokens may enter (generated at least `minCount` times, most
+frequent first, in any language), which base rows they replace (rows the corpus never generates, highest token id
+first: BPE merges them last), what never leaves (added tokens such as <|im_end|>), and explicit additions and
+removals. The corpus is neutral JSONL, one generated text per line as {"text": ...}; whoever owns the evaluation
+material exports it. With --model, only the tokens that checkpoint keeps count, so the list scores as many of its
+rows as the base does. The output holds sorted upstream token ids, one per line, as `tensorfold serve --draft-vocab`
+expects.
 
-Usage: draft_vocab.py --profile P.yaml --tokenizer tokenizer.json --builtin draft_vocab.txt [--model DIR] --out FILE
-Needs tokenizers, numpy and pyyaml (the repository's .venv).
+Usage: draft_vocab.py --profile P.json --corpus C.jsonl [...] --tokenizer tokenizer.json --builtin draft_vocab.txt
+       [--model DIR] --out FILE
+Needs tokenizers and numpy (the repository's .venv).
 """
 import argparse
-import glob
 import json
 from pathlib import Path
 
 import numpy as np
-import yaml
 
-PARTS = ("text", "reasoning", "tool-arguments")
 REPLACE_ORDERS = ("highest-id",)
 
 
 def load_profile(path):
     """The profile with defaults, rejecting unknown keys and values."""
-    profile = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    known = {"base", "corpus", "select", "replace", "protect", "force"}
+    profile = json.loads(Path(path).read_text(encoding="utf-8"))
+    known = {"base", "select", "replace", "protect", "force"}
     unknown = set(profile) - known
     if unknown:
         raise ValueError(f"{path}: unknown keys {sorted(unknown)}")
-    corpus = profile.get("corpus") or []
-    if not corpus:
-        raise ValueError(f"{path}: corpus is required")
-    for source in corpus:
-        parts = source.setdefault("parts", list(PARTS))
-        if not source.get("path") or set(parts) - set(PARTS):
-            raise ValueError(f"{path}: each corpus entry needs a path and parts from {PARTS}")
     select = {"minCount": 2, **(profile.get("select") or {})}
     replace = {"from": "unused", "order": "highest-id", **(profile.get("replace") or {})}
     if replace["from"] != "unused" or replace["order"] not in REPLACE_ORDERS:
         raise ValueError(f"{path}: replace supports from: unused and order: {REPLACE_ORDERS}")
     protect = {"addedTokens": True, "tokens": [], **(profile.get("protect") or {})}
     force = {"add": [], "remove": [], **(profile.get("force") or {})}
-    return {"base": profile.get("base", "builtin"), "corpus": corpus, "select": select, "replace": replace,
-            "protect": protect, "force": force}
+    return {"base": profile.get("base", "builtin"), "select": select, "replace": replace, "protect": protect, "force": force}
 
 
-def generated_texts(directory, parts):
-    """Distinct generated strings of a test-data directory's replay cases, in case order."""
+def corpus_texts(paths):
+    """Distinct texts of neutral corpus files ({"text": ...} per line), in file order."""
     seen, texts = set(), []
-
-    def add(part, text):
-        if part in parts and text and text.strip() and text not in seen:
-            seen.add(text)
-            texts.append(text)
-
-    for path in sorted(glob.glob(str(Path(directory) / "cases" / "replay" / "*.json"))):
-        case = json.loads(Path(path).read_text(encoding="utf-8"))
-        for message in case["request"]["messages"]:
-            if message["role"] != "assistant":
+    for path in paths:
+        for number, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
+            if not line.strip():
                 continue
-            content = message.get("content")
-            for text in [content] if isinstance(content, str) else [p.get("text", "") for p in content or [] if isinstance(p, dict)]:
-                add("text", text)
-            add("reasoning", message.get("reasoning_content") or message.get("reasoning"))
-            for call in message.get("tool_calls") or []:
-                add("tool-arguments", call["function"]["arguments"])
-        reference = case["reference"]
-        add("text", reference.get("text"))
-        add("reasoning", reference.get("reasoning"))
-        calls = reference.get("tool_calls")
-        if isinstance(calls, str):
-            calls = json.loads(calls) if calls.strip().startswith("[") else []
-        for call in calls or []:
-            add("tool-arguments", json.dumps(call, ensure_ascii=False))
+            text = json.loads(line).get("text")
+            if not isinstance(text, str):
+                raise ValueError(f"{path}:{number}: expected {{\"text\": string}}")
+            if text.strip() and text not in seen:
+                seen.add(text)
+                texts.append(text)
     return texts
 
 
@@ -136,7 +112,8 @@ def main():
     from tokenizers import Tokenizer
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--profile", type=Path, required=True, help="YAML draft-list profile")
+    parser.add_argument("--profile", type=Path, required=True, help="JSON draft-list profile")
+    parser.add_argument("--corpus", type=Path, nargs="+", required=True, help="neutral corpus JSONL ({\"text\": ...} per line)")
     parser.add_argument("--tokenizer", type=Path, required=True, help="the upstream checkpoint's tokenizer.json")
     parser.add_argument("--builtin", type=Path, required=True, help="TensorFold's built-in draft_vocab.txt (base: builtin)")
     parser.add_argument("--model", type=Path, help="a vocabulary-pruned checkpoint whose kept tokens bound the list")
@@ -145,7 +122,7 @@ def main():
     profile = load_profile(args.profile)
     tokenizer = Tokenizer.from_file(str(args.tokenizer))
     size = tokenizer.get_vocab_size(with_added_tokens=True)
-    texts = [text for source in profile["corpus"] for text in generated_texts(source["path"], source["parts"])]
+    texts = corpus_texts(args.corpus)
     counts = np.zeros(size, np.int64)
     for encoding in tokenizer.encode_batch(texts, add_special_tokens=False):
         np.add.at(counts, np.array(encoding.ids, dtype=np.int64), 1)
@@ -166,7 +143,7 @@ def main():
     with args.out.open("x", encoding="utf-8") as stream:
         stream.writelines(f"{i}\n" for i in ids)
     examples = lambda values: [tokenizer.decode([int(i)]) for i in values[np.argsort(-counts[values], kind="stable")][:40]]
-    report = {"profile": str(args.profile), "texts": len(texts), "tokens": int(counts.sum()), "base": int(len(base)),
+    report = {"profile": str(args.profile), "corpus": [str(p) for p in args.corpus], "texts": len(texts), "tokens": int(counts.sum()), "base": int(len(base)),
               "baseKept": int(kept[base].sum()), "rows": int(len(ids)), "swapped": int(len(added)),
               "protectedInBase": int((protected & kept)[base].sum()), "added": examples(added),
               "droppedHighestIds": [int(i) for i in dropped[-10:]],

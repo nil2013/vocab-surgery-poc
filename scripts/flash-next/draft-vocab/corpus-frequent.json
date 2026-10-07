@@ -1,0 +1,7 @@
+{
+  "base": "builtin",
+  "select": {"minCount": 2},
+  "replace": {"from": "unused", "order": "highest-id"},
+  "protect": {"addedTokens": true, "tokens": []},
+  "force": {"add": [], "remove": []}
+}

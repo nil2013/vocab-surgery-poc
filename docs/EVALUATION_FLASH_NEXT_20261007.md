@@ -97,7 +97,7 @@ server は request ごとに draft の受理数を log に残す（`accepted=受
 
 ## 4. 日本語の一部を簡体字・ハングルに置き換えた依頼
 
-[mixed-ja.json](../scripts/prompts/mixed-ja.json) の 8 文を、temperature 0 と 0.7（seed 1、2）で送った（各モデル 24 応答、最大 600 tokens）。依頼は 3 種類である。
+`scripts/prompts/mixed-ja.json`（`f163c9b` 時点） の 8 文を、temperature 0 と 0.7（seed 1、2）で送った（各モデル 24 応答、最大 600 tokens）。依頼は 3 種類である。
 
 - 普通の依頼：会議資料、案内メール、食べ方、施策
 - 自然な日本語への修正
@@ -129,7 +129,7 @@ server は request ごとに draft の受理数を log に残す（`accepted=受
 
 ## 5. 同じ置き換えをした簡単な Python の課題
 
-[mixed-ja-coding.json](../scripts/prompts/mixed-ja-coding.json) の 6 課題を、同じ 3 設定で送った（最大 1000 tokens）。code は実行せず、構文解析と目視で判定した。組み込みの `max`／`min` を呼んでいないかは、関数本体の構文木で確かめた。
+`scripts/prompts/mixed-ja-coding.json`（`f163c9b` 時点） の 6 課題を、同じ 3 設定で送った（最大 1000 tokens）。code は実行せず、構文解析と目視で判定した。組み込みの `max`／`min` を呼んでいないかは、関数本体の構文木で確かめた。
 
 | 課題（置き換えた語） | 元モデル | pruned-v2 |
 | --- | --- | --- |
@@ -173,7 +173,7 @@ TF は MTP の draft を、同梱の固定リスト（`draft_vocab.txt`、79,591
   - かなを 10 字以上含む生成では、30.5% の token がリストの外にある。リストの外の token は draft できないので、その位置では必ず却下される。
   - かなを含まない生成では 1.2%、reasoning では 0.8% だった。
   - リストの 8 割以上の行は、コーパスで一度も使われていない。
-- **入れ替えの方法**：`scripts/flash-next/draft_vocab.py` と profile `corpus-frequent.yaml` で入れ替えた。
+- **入れ替えの方法**：`scripts/flash-next/draft_vocab.py` と profile `corpus-frequent.yaml`（後に JSON に変更） で入れ替えた。
   - コーパスで 2 回以上生成された token のうちリストにないもの 3,114 個を、頻度順に入れる。言語は問わない。
   - 代わりに、コーパスで一度も生成されない行を、ID の大きい方から同じ数だけ落とす。
   - added tokens は落とさない。v4 で採点する行数（78,636）は変えない。
@@ -239,19 +239,4 @@ TF は MTP の draft を、同梱の固定リスト（`draft_vocab.txt`、79,591
 
 ## 再現
 
-[scripts/flash-next](../scripts/flash-next/README.md) の前提（CUDA 13 の NVIDIA GPU、約 84 GiB の GPU メモリ）を満たす環境で実行できる。
-
-```sh
-scripts/flash-next/setup-tensorfold.sh
-RUN=outputs/runs/<新しい run>
-SRC=models/models--Vontra--Qwen3.8-Flash-Next-MLX-4bit-MTP/snapshots/2b170fa6309d5d1ee380b35636075fac7945f286
-scripts/flash-next/evaluate.sh "$RUN" original "$SRC"
-scripts/flash-next/evaluate.sh "$RUN" pruned-v2 outputs/models/flash-next-ja-en-coding-v2
-for label in original pruned-v2; do
-  model=$([ $label = original ] && echo "$SRC" || echo outputs/models/flash-next-ja-en-coding-v2)
-  scripts/flash-next/serve.sh "$RUN/mixed-$label-server.log" "$model" \
-    sh -c 'python3 scripts/probe_replies.py "$TF_BASE" fn "$0/test-data" scripts/prompts/mixed-ja.json "$0/mixed-$1.jsonl"' "$RUN" $label
-  scripts/flash-next/serve.sh "$RUN/coding-$label-server.log" "$model" \
-    sh -c 'python3 scripts/probe_replies.py "$TF_BASE" fn "$0/test-data" scripts/prompts/mixed-ja-coding.json "$0/coding-$1.jsonl" 1000' "$RUN" $label
-done
-```
+この評価に使ったスクリプトのうち、外部の評価素材の内部を取り込んでいたもの（test-data の runner への patch、`probe_replies.py` と依頼文、`coding_bench_generate.py`／`coding_bench_score.py`、`flash-next/evaluate.sh`）は、境界違反として削除した（[EVALUATION_ARCHITECTURE.md](EVALUATION_ARCHITECTURE.md)）。当時の手順は `f163c9b` の時点のファイルで再現できる。今後の評価は、外部の素材が公開する CLI を `scripts/flash-next/serve.sh` の下で呼ぶ形で行う。

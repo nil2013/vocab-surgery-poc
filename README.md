@@ -23,11 +23,11 @@ sbt --batch ';set Test / javaOptions += "-DvocabSurgery.snapshot=models/models--
 
 この integration test は指定 snapshot の設定・tokenizer・index と全 shard headers を読み取り、系列によらない不変条件（未登録行数、基礎 token の保護、added tokens の残存、削減 byte 数と行数の対応、対象 tensor だけの縮小、書き換え後の ID 範囲）で更新計画を検証する。元ファイルを書き換えず、payload の hash や推論品質は検証しない。
 
-`tokenizers` をインストール済みの Python を test JVM の `vocabSurgery.tokenizersPython` property に追加すると、更新済み tokenizer JSON の参照実装でのロード、10,086 字の NFC 一致、日本語・coding・protocol 入力の round trip も検証する。Python process はネットワークにアクセスせず、一時ファイルは終了時に削除する。参照検証用の Python は repository root の `.venv` に用意できる。`regex` は `scripts/greek_fragments.py` が Unicode の Script 判定に、`numpy` と `pyyaml` は `scripts/flash-next/draft_vocab.py` が使う。
+`tokenizers` をインストール済みの Python を test JVM の `vocabSurgery.tokenizersPython` property に追加すると、更新済み tokenizer JSON の参照実装でのロード、10,086 字の NFC 一致、日本語・coding・protocol 入力の round trip も検証する。Python process はネットワークにアクセスせず、一時ファイルは終了時に削除する。参照検証用の Python は repository root の `.venv` に用意できる。`numpy` は `scripts/flash-next/draft_vocab.py` が使う。
 
 ```sh
 uv venv .venv
-uv pip install --python .venv/bin/python tokenizers transformers jinja2 regex numpy pyyaml
+uv pip install --python .venv/bin/python tokenizers transformers jinja2 numpy
 ```
 
 Coder-Next の snapshot では次のように実行する。Flash-Next では snapshot path を置換する。
@@ -92,7 +92,7 @@ scripts/vocab-surgery verify --manifest "$RUN/manifest.json" --python "$EVAL_PYT
 
 初期 policy は Unicode 17.0.0 の Arabic／Cyrillic／Hangul と、日本語参照集合外の Han 漢字を対象とし、`protectMath=true` を既定にする。変更には `plan --policy outputs/config/pruning.json` を使う。[policy と処理設計](docs/PROCESSING.md) に形式、保護集合、容量、staging、失敗時の再実行方法を記載している。未加工 shard は copy-on-write clone（macOS `clonefile`、Linux `FICLONE`）を試し、ファイルシステムが対応しなければ bounded copy に切り替える。`apply --copy-only` で clone を無効にできる。
 
-日英 coding 用の追加削減には `--policy policies/ja-en-coding-v2.json` を指定できる。 `policies/ja-en-coding-v3.json` は v2 に Greek の語の断片の削除リスト（`policies/greek-fragments-flash-next.txt`、`scripts/greek_fragments.py` で生成）を加えたもの。`policies/ja-en-coding-v4.json` は v3 にベトナム語・トルコ語・ポーランド語などの拡張 Latin 文字、`hanForms`（`priority`）、Flash-Next の行数を 128 の倍数にそろえる削除リスト（`policies/flash-next-v4-trim.txt`）を加えたもの（Flash-Next で 172,416 行）。この profile は Greek／Canadian_Aboriginal を残し、他の追加 Script と `个`・`开`・`关`・`无`・`网` を対象とする。[設定・用例・加工結果](docs/PRUNING_JA_EN_CODING_V2.md)を参照。
+日英 coding 用の追加削減には `--policy policies/ja-en-coding-v2.json` を指定できる。 `policies/ja-en-coding-v3.json` は v2 に Greek の語の断片の削除リスト（`policies/greek-fragments-flash-next.txt`。v2 の計画で残った token のうち、Greek の文字を 3 字以上、またはアクセント付きで 2 字以上含むもの）を加えたもの。`policies/ja-en-coding-v4.json` は v3 にベトナム語・トルコ語・ポーランド語などの拡張 Latin 文字、`hanForms`（`priority`）、Flash-Next の行数を 128 の倍数にそろえる削除リスト（`policies/flash-next-v4-trim.txt`）を加えたもの（Flash-Next で 172,416 行）。この profile は Greek／Canadian_Aboriginal を残し、他の追加 Script と `个`・`开`・`关`・`无`・`网` を対象とする。[設定・用例・加工結果](docs/PRUNING_JA_EN_CODING_V2.md)を参照。
 
 上記の一連の操作は次でも実行できる。run は `outputs/runs/<name>`、モデルは `outputs/models/<name>` に作られる。`--python` の既定は `.venv/bin/python`。
 
