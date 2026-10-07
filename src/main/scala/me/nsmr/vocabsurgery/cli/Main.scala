@@ -7,6 +7,7 @@ import scala.util.control.NonFatal
 import scopt.{DefaultOEffectSetup, OParser}
 import me.nsmr.vocabsurgery.io.*
 import me.nsmr.vocabsurgery.processing.*
+import me.nsmr.vocabsurgery.sandbox.*
 
 /** Parsed CLI values; required-option and count validation belongs to the scopt command schema. */
 final case class Arguments(command: String = "", source: Path = Path.of("."), runDirectory: Path = Path.of("."),
@@ -17,7 +18,12 @@ final case class Arguments(command: String = "", source: Path = Path.of("."), ru
     profileSource: Option[Path] = None, profileText: Option[String] = None, kanjiDirectory: Path = Path.of("kanji-data"),
     unihanDirectory: Option[Path] = None, jmdictDirectory: Option[Path] = None,
     apiKeyEnvironment: String = "OMLX_API_KEY", trials: Int = 5, warmups: Int = 1, timeout: Int = 3600, copyOnly: Boolean = false,
-    serverEnvironment: Option[Path] = None)
+    serverEnvironment: Option[Path] = None, sandbox: SandboxArguments = SandboxArguments())
+
+/** Options of the sandbox commands. */
+final case class SandboxArguments(choice: Option[String] = None, workDirectory: Path = Path.of("."), readable: Vector[Path] = Vector.empty,
+    environment: Map[String, String] = Map.empty, timeoutSeconds: Int = 60, command: Vector[String] = Vector.empty):
+  def sandboxChoice: SandboxChoice = choice.fold(SandboxChoice.fromEnvironment)(SandboxChoice.parse)
 
 /** Thin command dispatch; domain decisions and file mutation remain in their respective layers. */
 object Main:
@@ -27,6 +33,9 @@ object Main:
     def python = opt[String]("python").required().valueName("<interpreter>").action((v, c) => c.copy(python = Path.of(v)))
       .text("Python with tokenizers and transformers installed; no packages are downloaded")
     def manifest = opt[String]("manifest").required().action((v, c) => c.copy(manifest = Path.of(v)))
+    def sandboxChoice = opt[String]("sandbox").action((v, c) => c.copy(sandbox = c.sandbox.copy(choice = Some(v))))
+      .validate(v => if SandboxChoice.values.exists(_.name == v) then success else failure(s"--sandbox must be one of ${SandboxChoice.values.map(_.name).mkString(", ")}"))
+      .text("auto (default, or VOCAB_SANDBOX), sandbox-exec or docker")
     OParser.sequence(programName("vocab-surgery"), head("vocab-surgery"),
       help("help").text("Show command usage (also: help <command>)"),
       cmd("inspect").action((_, c) => c.copy(command = "inspect")).text("Inspect source metadata without reading weights").children(
@@ -72,7 +81,18 @@ object Main:
         opt[String]("server-environment").action((v, c) => c.copy(serverEnvironment = Some(Path.of(v)))).text("Dedicated server.json for version and sampled process RSS"),
         opt[Int]("trials").action((v, c) => c.copy(trials = v)).validate(v => if v > 0 then success else failure("trials must be positive")),
         opt[Int]("warmups").action((v, c) => c.copy(warmups = v)).validate(v => if v >= 0 then success else failure("warmups cannot be negative")),
-        opt[Int]("timeout-seconds").action((v, c) => c.copy(timeout = v)).validate(v => if v > 0 then success else failure("timeout must be positive"))))
+        opt[Int]("timeout-seconds").action((v, c) => c.copy(timeout = v)).validate(v => if v > 0 then success else failure("timeout must be positive"))),
+      cmd("sandbox-check").action((_, c) => c.copy(command = "sandbox-check"))
+        .text("Show which sandbox would confine generated code here (VOCAB_SANDBOX or --sandbox) and why others cannot").children(sandboxChoice),
+      cmd("sandbox-run").action((_, c) => c.copy(command = "sandbox-run"))
+        .text("Run a command confined: no network, host writes only in the work directory, reads only the system and listed trees").children(
+        sandboxChoice,
+        opt[String]("work-dir").required().action((v, c) => c.copy(sandbox = c.sandbox.copy(workDirectory = Path.of(v)))).text("Existing directory the command may write"),
+        opt[String]("readable").unbounded().action((v, c) => c.copy(sandbox = c.sandbox.copy(readable = c.sandbox.readable :+ Path.of(v)))).text("Tree the command may read (repeatable)"),
+        opt[String]("env").unbounded().valueName("NAME=VALUE").action((v, c) => c.copy(sandbox = c.sandbox.copy(environment =
+          c.sandbox.environment + (v.takeWhile(_ != '=') -> v.dropWhile(_ != '=').drop(1))))).validate(v => if v.contains('=') then success else failure("--env needs NAME=VALUE")),
+        opt[Int]("timeout-seconds").action((v, c) => c.copy(sandbox = c.sandbox.copy(timeoutSeconds = v))).validate(v => if v > 0 then success else failure("timeout must be positive")),
+        arg[String]("<command>...").unbounded().required().action((v, c) => c.copy(sandbox = c.sandbox.copy(command = c.sandbox.command :+ v)))))
 
   def main(args: Array[String]): Unit = sys.exit(execute(args.toVector))
 
@@ -80,7 +100,7 @@ object Main:
   def execute(args: Vector[String], options: ProcessingOptions = ProcessingOptions(), helpers: Path = Path.of("scripts"),
       out: PrintStream = System.out, err: PrintStream = System.err): Int =
     val normalized = if args.isEmpty then Vector("--help") else if args.head == "help" then args.tail :+ "--help" else args
-    if normalized.contains("--help") && (normalized.size == 1 || Set("inspect", "plan", "apply", "verify", "translate-ids", "fetch-reference", "profile-han", "evaluate")(normalized.head)) then
+    if normalized.contains("--help") && (normalized.size == 1 || Set("inspect", "plan", "apply", "verify", "translate-ids", "fetch-reference", "profile-han", "evaluate", "sandbox-check", "sandbox-run")(normalized.head)) then
       out.println(OParser.usage(parser))
       return 0
     val (parsed, effects) = OParser.runParser(parser, normalized, Arguments())
@@ -127,9 +147,16 @@ object Main:
                 inputs.mapObject(fields => config.profileSource.fold(fields)(source => fields.add("source", Json.fromString(source.toRealPath().toString)))),
                 config.runDirectory, config.profileSource.toVector :+ config.kanjiDirectory, runtime)
             case "evaluate" => evaluate(config, runtime, helpers)
+            case "sandbox-check" => Sandbox.report(config.sandbox.sandboxChoice)
+            case "sandbox-run" =>
+              val options = config.sandbox
+              Sandbox.platform(options.sandboxChoice).run(options.command, Confinement(options.workDirectory, options.readable,
+                options.environment, scala.concurrent.duration.FiniteDuration(options.timeoutSeconds.toLong, "seconds"))).json
             case _ => throw IllegalArgumentException("a command is required; use --help")
           out.println(ProcessingIO.canonical(result))
-          if config.command == "evaluate" && result.hcursor.downField("logits").get[Boolean]("passed").contains(false) then 4 else 0
+          if config.command == "evaluate" && result.hcursor.downField("logits").get[Boolean]("passed").contains(false) then 4
+          else if config.command == "sandbox-run" && !result.hcursor.get[Int]("exitCode").contains(0) then 5
+          else 0
         catch
           case NonFatal(error) =>
             err.println(Option(error.getMessage).getOrElse(error.getClass.getName))

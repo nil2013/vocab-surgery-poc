@@ -54,6 +54,7 @@ Run from the repository root with JDK 17+. Compiler warnings are errors. No sepa
 | Safetensors layout / binary I/O | `model.SafetensorsSuite`, plus `model.ModelLoaderSuite` if snapshot behavior changes |
 | Plan persistence, transfer, staging, publication | `processing.ProcessingSuite` |
 | CLI dispatch, argument / helper failures | `cli.CliSuite` |
+| Confined execution of generated code | `sandbox.SandboxSuite` (its live tests need a sandbox on the host; report skips) |
 
 - For build / dependency or cross-package changes, use `sbt --batch testFull`. In sbt 2, `test` is incremental; `clean;test` does not replace `testFull`.
 - When real-checkpoint coverage is needed, run `model.LocalSnapshotSuite` using the README's test-JVM property setup. It checks family-independent invariants on any supported snapshot. Without `vocabSurgery.snapshot`, it skips: do not count this as coverage or auto-download weights. Reference tokenizer / NFC comparison additionally requires the explicit `vocabSurgery.tokenizersPython` property; do not count an unset property as that coverage.

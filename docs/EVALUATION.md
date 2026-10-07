@@ -16,14 +16,14 @@ python3 scripts/setup-evaluation-tools.py
 python3 -m unittest discover -s scripts/tests -v
 ```
 
-生成 code は [sandbox.py](../scripts/sandbox.py) の `Sandbox` を通して実行する。どの実装も、ネットワークを遮断し、書き込みを使い捨ての作業 directory（HOME・TMPDIR・XDG の各 directory もそこに置く）に限り、読み取りをシステムと呼び出し側が渡した tree に限る。API key は子の環境に渡さない。Python は固定 asserts、Scala はコンパイル後の asserts、TypeScript は strict compile 後の Node VM tests を使う。timeout と heap 制限を設定する。
+生成 code は `sandbox` パッケージ（`src/main/scala/me/nsmr/vocabsurgery/sandbox/Sandbox.scala`）の `Sandbox` を通して実行する。`scripts/vocab-surgery sandbox-check` で、この host で使える実装と使えない理由を表示し、`sandbox-run --work-dir DIR [--readable TREE]... [--env NAME=VALUE]... -- COMMAND...` で任意のコマンドを隔離して実行する（実行したコマンドが失敗すると終了コード 5）。Python の [sandbox.py](../scripts/sandbox.py) は参照実装で、`code_checks.py` を移すまで残す。どの実装も、ネットワークを遮断し、書き込みを使い捨ての作業 directory（HOME・TMPDIR・XDG の各 directory もそこに置く）に限り、読み取りをシステムと呼び出し側が渡した tree に限る。API key は子の環境に渡さない。Python は固定 asserts、Scala はコンパイル後の asserts、TypeScript は strict compile 後の Node VM tests を使う。timeout と heap 制限を設定する。
 
 | 実装 | host | 方式 |
 | --- | --- | --- |
 | `sandbox-exec` | macOS | `sandbox-exec` の profile で、ネットワーク・作業 directory 外への書き込み・指定外の読み取りを拒否 |
 | `docker` | Linux（docker server が必要） | 空の image（`vocab-surgery-sandbox:empty`、初回に `FROM scratch` から作る）に host の `/usr`・`/etc` と渡された tree を読み取り専用で mount し、作業 directory だけを書き込み可能にする。`--network none`、`--read-only`、全 capability の削除、呼び出し元の uid、メモリと pid の上限 |
 
-`sandbox.platform()` は `VOCAB_SANDBOX`（`auto`、`sandbox-exec`、`docker`）に従い、`auto` では host の OS で使える実装を選ぶ。使える実装がなければ実行を停止し、無制限実行に切り替えない。
+`Sandbox.platform()` は `VOCAB_SANDBOX` または `--sandbox`（`auto`、`sandbox-exec`、`docker`）に従い、`auto` では host の OS で使える実装を選ぶ。使える実装がなければ実行を停止し、無制限実行に切り替えない。
 
 ## 専用 server と CLI
 

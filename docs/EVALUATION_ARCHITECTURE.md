@@ -2,7 +2,7 @@
 
 `scripts/` に溜まった評価用の Python を整理し、日常的に使うものを Scala の production code にするための設計である。`scripts/` に残すのは sh で書ける程度の近道（CLI の短縮経路）だけにする。`scripts/` の Python は参照実装であり、正規の実装ではない。
 
-境界と棲み分けは 2026-10-07 にユーザーと合意した。段階 1（境界違反の削除）は済み、段階 2 以降は未実装。
+境界と棲み分けは 2026-10-07 にユーザーと合意した。進み具合は 8 節以降に記録する。
 
 ## 1. 境界
 
@@ -131,3 +131,11 @@ test-data の submodule は差し替える可能性が高い。特定の素材�
 - `flash-next/acceptance.py` は、test-data の結果の形式を読まず、このプロジェクトが送った request の記録とだけ照合する。
 - `flash-next/draft_vocab.py` は、評価素材のケースファイルを読まず、中立のコーパス（`{"text": …}` の JSONL）と JSON の profile を読む。
 - AGENTS.md と評価の手順の文書から、特定の素材のパスとケースの形式を外した。過去のレポートは記録として残し、当時のスクリプトの在りかを書き添えた。
+
+## 9. 段階 2 の結果（sandbox）
+
+- `sandbox` パッケージ：`Confinement`、`ConfinedResult`（`Completed`／`TimedOut`）、`trait Sandbox`、`SandboxChoice`、`Sandbox.platform()`。実装 `MacSandboxExec` と `Docker` は外から見えない（`FileTransfer` と同じ形）。使える実装がなければ `SandboxUnavailable` で止め、隔離しない実行はない。
+- CLI：`sandbox-check`（使える実装と理由）、`sandbox-run`（任意のコマンドを隔離して実行し、失敗なら終了コード 5）。
+- テスト：`sandbox.SandboxSuite`（選択の規則、Docker の起動引数、symlink を通る interpreter の tree、環境、実際の隔離とタイムアウト）と `cli.CliSuite`。
+- 参照実装との一致（実機確認、Docker）：偽の `docker` で記録した `docker run` の引数は、フラグ・mount・コマンドが一致し、環境変数は既定の `PATH` を揃えた後に一致した。同じ確認用スクリプトの結果（ネットワークなし、外への書き込みの拒否、作業ディレクトリへの書き込み、HOME、渡した環境変数）も一致した。
+- Python の `scripts/sandbox.py` は、まだ `code_checks.py` が使うので、段階 5 で一緒に削除する。

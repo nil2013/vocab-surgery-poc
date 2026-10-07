@@ -101,3 +101,27 @@ class CliSuite extends munit.FunSuite:
       assertEquals(invoke(args.updated(6, output.resolve("draft/other.txt").toString), options)._1, 1)
     }
   }
+
+  test("sandbox-check reports every implementation; sandbox-run confines a command or refuses without a sandbox") {
+    val (code, text, _) = invoke(Vector("sandbox-check"))
+    assertEquals(code, 0)
+    val report = io.circe.jawn.parse(text).toOption.get
+    assertEquals(report.hcursor.downField("implementations").as[Vector[io.circe.Json]].map(_.size), Right(2))
+    assertEquals(invoke(Vector("sandbox-run", "--work-dir", ".", "--sandbox", "none", "true"))._1, 2)
+    assertEquals(invoke(Vector("sandbox-run", "--work-dir", "."))._1, 2)
+    val directory = Files.createTempDirectory("vocab-cli-sandbox-")
+    try
+      val chosen = report.hcursor.get[String]("chosen").toOption
+      val run = Vector("sandbox-run", "--work-dir", directory.toString, "--env", "GREETING=hi", "--", "sh", "-c", "echo $GREETING > out.txt; exit 3")
+      val (exit, output, _) = invoke(run)
+      chosen match
+        case Some(name) =>
+          assertEquals(exit, 5)
+          val result = io.circe.jawn.parse(output).toOption.get.hcursor
+          assertEquals((result.get[String]("sandbox"), result.get[Int]("exitCode")), (Right(name), Right(3)))
+          assertEquals(Files.readString(directory.resolve("out.txt")).trim, "hi")
+        case None => assertEquals(exit, 1)
+    finally
+      Files.deleteIfExists(directory.resolve("out.txt"))
+      Files.deleteIfExists(directory)
+  }
