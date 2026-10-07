@@ -45,8 +45,6 @@ def flash_next(name):
     return module
 
 
-flash_next_acceptance = flash_next("acceptance")
-flash_next_bench = flash_next("bench")
 try:
     flash_next_draft_vocab = flash_next("draft_vocab")
 except ImportError:
@@ -256,34 +254,6 @@ class EvaluationTests(unittest.TestCase):
             (model / "vocab.json").unlink()
             with self.assertRaises(FileNotFoundError):
                 check_tokenizer.check_files(source, model, mapping)
-
-    def test_flash_next_acceptance_follows_sending_order_and_rejects_misalignment(self):
-        def line(tokens, rounds, accepted, proposed):
-            return (f"[tensorfold] done req-1 prompt=9 cached=0 thinking=False tokens={tokens} sha=0 finish=stop "
-                    f"tok/s=50.0 ttft=0.1s prefill=0.1s rounds={rounds} accepted={accepted}/{proposed}")
-        usage = lambda n: {"usage": {"completion_tokens": n}}
-        bench = {"rows": [{"prompt": "ja", "draft": True, "trial": 0, "completion_tokens": 5},
-                          {"prompt": "ja", "draft": False, "trial": 0, "completion_tokens": 5}]}
-        records = [{"case": "leak", "setting": "t0", **usage(6)}, {"case": "leak", "setting": "t1", **usage(8)}]
-        sent = list(flash_next_acceptance.bench_requests(bench)) + list(flash_next_acceptance.record_requests(records))
-        self.assertEqual([name for _, name, _ in sent], ["bench:ja/mtp#0", "bench:ja/serial#0", "leak/t0", "leak/t1"])
-        logged = flash_next_acceptance.log_requests(["noise", line(5, 2, 3, 3), line(5, 5, 0, 0), line(6, 4, 2, 6), line(8, 4, 4, 6)])
-        totals = flash_next_acceptance.totals(flash_next_acceptance.attribute(logged, sent))
-        self.assertEqual(totals["leak"]["accepted"], 6)
-        self.assertEqual(totals["leak"]["proposed"], 12)
-        self.assertEqual(totals["bench:ja/mtp"]["tokensPerRound"], 2.5)
-        self.assertNotIn("bench:ja/serial", totals)
-        with self.assertRaises(ValueError):
-            flash_next_acceptance.attribute(logged[:-1], sent)
-        with self.assertRaises(ValueError):
-            flash_next_acceptance.attribute([dict(logged[0], tokens=9)] + logged[1:], sent)
-
-    def test_flash_next_bench_summary_leaves_out_warmups(self):
-        rows = [{"prompt": p, "draft": d, "trial": t, "warmup": t == 0, "ttft": 0.1, "total": 1.1, "decode_tps": 10.0 * (t + 1),
-                 "completion_tokens": 4, "chars": 10} for p in flash_next_bench.PROMPTS for d in (True, False) for t in range(flash_next_bench.TRIALS)]
-        summary = flash_next_bench.summarize(rows)
-        self.assertEqual(summary["ja/mtp"]["decode_tps_median"], 30.0)
-        self.assertEqual(len(summary["code/serial"]["completion_tokens"]), flash_next_bench.TRIALS - 1)
 
     @unittest.skipIf(flash_next_draft_vocab is None, "needs numpy")
     def test_flash_next_draft_list_keeps_its_rows_and_protected_tokens(self):

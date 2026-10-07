@@ -18,7 +18,21 @@ final case class Arguments(command: String = "", source: Path = Path.of("."), ru
     profileSource: Option[Path] = None, profileText: Option[String] = None, kanjiDirectory: Path = Path.of("kanji-data"),
     unihanDirectory: Option[Path] = None, jmdictDirectory: Option[Path] = None,
     apiKeyEnvironment: String = "OMLX_API_KEY", trials: Int = 5, warmups: Int = 1, timeout: Int = 3600, copyOnly: Boolean = false,
-    serverEnvironment: Option[Path] = None, sandbox: SandboxArguments = SandboxArguments())
+    serverEnvironment: Option[Path] = None, sandbox: SandboxArguments = SandboxArguments(), serve: ServeArguments = ServeArguments())
+
+/** Options of the serve command; runtime-specific ones apply only to their runtime. */
+final case class ServeArguments(runtime: String = "", models: Vector[(String, Path)] = Vector.empty, serverDirectory: Path = Path.of("."),
+    port: Int = 18080, readyTimeoutSeconds: Int = 1800, python: Path = Path.of("python3"), cloneDirectory: Path = Path.of("outputs/tensorfold"),
+    context: Int = 65536, pleOnSsd: Boolean = true, draftVocabulary: Option[Path] = None, cudaHome: Path = Path.of("/usr/local/cuda"),
+    command: Vector[String] = Vector.empty, probes: Path = Path.of("evaluation/speed-prompts.json"), output: Option[Path] = None,
+    material: Path = Path.of("."), copyTo: Option[Path] = None):
+  def request: me.nsmr.vocabsurgery.runtime.ServeRequest =
+    me.nsmr.vocabsurgery.runtime.ServeRequest(models.map((name, path) => me.nsmr.vocabsurgery.runtime.ServedModel(name, path)), serverDirectory, port,
+      scala.concurrent.duration.FiniteDuration(readyTimeoutSeconds.toLong, "seconds"))
+  def inferenceRuntime: me.nsmr.vocabsurgery.runtime.InferenceRuntime = runtime match
+    case "omlx" => me.nsmr.vocabsurgery.runtime.OMlx(python)
+    case "tensorfold" => me.nsmr.vocabsurgery.runtime.TensorFoldClone(cloneDirectory, context, pleOnSsd, draftVocabulary, cudaHome)
+    case other => throw IllegalArgumentException(s"unknown runtime $other; choose omlx or tensorfold")
 
 /** Options of the sandbox commands. */
 final case class SandboxArguments(choice: Option[String] = None, workDirectory: Path = Path.of("."), readable: Vector[Path] = Vector.empty,
@@ -33,6 +47,20 @@ object Main:
     def python = opt[String]("python").required().valueName("<interpreter>").action((v, c) => c.copy(python = Path.of(v)))
       .text("Python with tokenizers and transformers installed; no packages are downloaded")
     def manifest = opt[String]("manifest").required().action((v, c) => c.copy(manifest = Path.of(v)))
+    def serveOptions: Seq[OParser[?, Arguments]] = Seq(
+        opt[String]("runtime").required().action((v, c) => c.copy(serve = c.serve.copy(runtime = v)))
+          .validate(v => if Set("omlx", "tensorfold")(v) then success else failure("--runtime must be omlx or tensorfold")).text("omlx | tensorfold"),
+        opt[String]("model").required().unbounded().valueName("NAME=CHECKPOINT").action((v, c) => c.copy(serve = c.serve.copy(models =
+          c.serve.models :+ (v.takeWhile(_ != '=') -> Path.of(v.dropWhile(_ != '=').drop(1)))))).validate(v => if v.contains('=') then success else failure("--model needs NAME=CHECKPOINT")),
+        opt[String]("server-dir").required().action((v, c) => c.copy(serve = c.serve.copy(serverDirectory = Path.of(v)))).text("New directory under outputs for server.log and server.json"),
+        opt[Int]("port").action((v, c) => c.copy(serve = c.serve.copy(port = v))).text("Loopback port; default 18080"),
+        opt[Int]("ready-timeout-seconds").action((v, c) => c.copy(serve = c.serve.copy(readyTimeoutSeconds = v))).validate(v => if v > 0 then success else failure("timeout must be positive")),
+        opt[String]("python").action((v, c) => c.copy(serve = c.serve.copy(python = Path.of(v)))).text("omlx: Python with omlx installed"),
+        opt[String]("tensorfold-clone").action((v, c) => c.copy(serve = c.serve.copy(cloneDirectory = Path.of(v)))).text("tensorfold: clone from scripts/flash-next/setup-tensorfold.sh; default outputs/tensorfold"),
+        opt[Int]("context").action((v, c) => c.copy(serve = c.serve.copy(context = v))).text("tensorfold: prompt and reply window; default 65536"),
+        opt[Unit]("no-ple-on-ssd").action((_, c) => c.copy(serve = c.serve.copy(pleOnSsd = false))).text("tensorfold: keep the PLE tables in memory"),
+        opt[String]("draft-vocab").action((v, c) => c.copy(serve = c.serve.copy(draftVocabulary = Some(Path.of(v))))).text("tensorfold: draft list of upstream token ids"),
+        opt[String]("cuda-home").action((v, c) => c.copy(serve = c.serve.copy(cudaHome = Path.of(v)))).text("tensorfold: CUDA toolkit; default /usr/local/cuda"))
     def sandboxChoice = opt[String]("sandbox").action((v, c) => c.copy(sandbox = c.sandbox.copy(choice = Some(v))))
       .validate(v => if SandboxChoice.values.exists(_.name == v) then success else failure(s"--sandbox must be one of ${SandboxChoice.values.map(_.name).mkString(", ")}"))
       .text("auto (default, or VOCAB_SANDBOX), sandbox-exec or docker")
@@ -92,7 +120,21 @@ object Main:
         opt[String]("env").unbounded().valueName("NAME=VALUE").action((v, c) => c.copy(sandbox = c.sandbox.copy(environment =
           c.sandbox.environment + (v.takeWhile(_ != '=') -> v.dropWhile(_ != '=').drop(1))))).validate(v => if v.contains('=') then success else failure("--env needs NAME=VALUE")),
         opt[Int]("timeout-seconds").action((v, c) => c.copy(sandbox = c.sandbox.copy(timeoutSeconds = v))).validate(v => if v > 0 then success else failure("timeout must be positive")),
-        arg[String]("<command>...").unbounded().required().action((v, c) => c.copy(sandbox = c.sandbox.copy(command = c.sandbox.command :+ v)))))
+        arg[String]("<command>...").unbounded().required().action((v, c) => c.copy(sandbox = c.sandbox.copy(command = c.sandbox.command :+ v)))),
+      cmd("serve").action((_, c) => c.copy(command = "serve"))
+        .text("Serve checkpoints with an inference runtime; with a command after --, run it once ready (VOCAB_ENDPOINT, VOCAB_MODELS) and stop").children(
+        (serveOptions :+ arg[String]("<command>...").unbounded().optional().action((v, c) => c.copy(serve = c.serve.copy(command = c.serve.command :+ v))))*),
+      cmd("measure-speed").action((_, c) => c.copy(command = "measure-speed"))
+        .text("Serve one checkpoint and measure decode speed, TTFT and, where the runtime reports it, draft acceptance on fixed prompts").children(
+        (serveOptions ++ Seq(
+          opt[String]("probes").action((v, c) => c.copy(serve = c.serve.copy(probes = Path.of(v)))).text("Speed prompts; default evaluation/speed-prompts.json"),
+          opt[String]("out").required().action((v, c) => c.copy(serve = c.serve.copy(output = Some(Path.of(v))))).text("New result JSON under outputs")))*),
+      cmd("run-external").action((_, c) => c.copy(command = "run-external"))
+        .text("Serve, then run an external evaluation material's own CLI (after --) with VOCAB_ENDPOINT and VOCAB_MODELS, and record the run").children(
+        (serveOptions ++ Seq(
+          opt[String]("material").required().action((v, c) => c.copy(serve = c.serve.copy(material = Path.of(v)))).text("The material's directory; its runner and formats stay its own"),
+          opt[String]("copy-to").action((v, c) => c.copy(serve = c.serve.copy(copyTo = Some(Path.of(v))))).text("New directory under outputs to copy the material into and run in"),
+          arg[String]("<command>...").unbounded().required().action((v, c) => c.copy(serve = c.serve.copy(command = c.serve.command :+ v)))))*))
 
   def main(args: Array[String]): Unit = sys.exit(execute(args.toVector))
 
@@ -100,7 +142,7 @@ object Main:
   def execute(args: Vector[String], options: ProcessingOptions = ProcessingOptions(), helpers: Path = Path.of("scripts"),
       out: PrintStream = System.out, err: PrintStream = System.err): Int =
     val normalized = if args.isEmpty then Vector("--help") else if args.head == "help" then args.tail :+ "--help" else args
-    if normalized.contains("--help") && (normalized.size == 1 || Set("inspect", "plan", "apply", "verify", "translate-ids", "fetch-reference", "profile-han", "evaluate", "sandbox-check", "sandbox-run")(normalized.head)) then
+    if normalized.contains("--help") && (normalized.size == 1 || Set("inspect", "plan", "apply", "verify", "translate-ids", "fetch-reference", "profile-han", "evaluate", "sandbox-check", "sandbox-run", "serve", "measure-speed", "run-external")(normalized.head)) then
       out.println(OParser.usage(parser))
       return 0
     val (parsed, effects) = OParser.runParser(parser, normalized, Arguments())
@@ -148,6 +190,17 @@ object Main:
                 config.runDirectory, config.profileSource.toVector :+ config.kanjiDirectory, runtime)
             case "evaluate" => evaluate(config, runtime, helpers)
             case "sandbox-check" => Sandbox.report(config.sandbox.sandboxChoice)
+            case "serve" => serve(config.serve, runtime, err)
+            case "measure-speed" =>
+              val arguments = config.serve
+              me.nsmr.vocabsurgery.evaluation.SpeedMeasurement.run(arguments.inferenceRuntime, arguments.request,
+                me.nsmr.vocabsurgery.evaluation.SpeedProbes.load(arguments.probes), arguments.output.get, runtime,
+                row => err.println(s"${row.prompt}/${row.mode} #${row.trial}: ${row.response.completionTokens.getOrElse("?")} tokens, " +
+                  f"${row.response.decodeTokensPerSecond.getOrElse(0.0)}%.1f tok/s")).mapObject(_.remove("rows"))
+            case "run-external" =>
+              val arguments = config.serve
+              me.nsmr.vocabsurgery.evaluation.ExternalRun.run(arguments.inferenceRuntime, arguments.request,
+                me.nsmr.vocabsurgery.evaluation.ExternalRun(arguments.material, arguments.copyTo, arguments.command), runtime)
             case "sandbox-run" =>
               val options = config.sandbox
               Sandbox.platform(options.sandboxChoice).run(options.command, Confinement(options.workDirectory, options.readable,
@@ -155,12 +208,31 @@ object Main:
             case _ => throw IllegalArgumentException("a command is required; use --help")
           out.println(ProcessingIO.canonical(result))
           if config.command == "evaluate" && result.hcursor.downField("logits").get[Boolean]("passed").contains(false) then 4
-          else if config.command == "sandbox-run" && !result.hcursor.get[Int]("exitCode").contains(0) then 5
+          else if Set("sandbox-run", "serve", "run-external")(config.command) && result.hcursor.get[Int]("exitCode").exists(_ != 0) then 5
+          else if config.command == "sandbox-run" && result.hcursor.get[Boolean]("timedOut").contains(true) then 5
           else 0
         catch
           case NonFatal(error) =>
             err.println(Option(error.getMessage).getOrElse(error.getClass.getName))
             if config.command == "verify" then 3 else 1
+
+  /** Serve, then run the given command against the endpoint and stop; without a command, serve until interrupted. */
+  private def serve(arguments: ServeArguments, options: ProcessingOptions, err: PrintStream): Json =
+    import me.nsmr.vocabsurgery.runtime.*
+    val server = arguments.inferenceRuntime.serve(arguments.request, options)
+    try
+      err.println(s"Serving ${server.endpoint.models.mkString(", ")} at ${server.endpoint.base}; log ${server.log}")
+      if arguments.command.isEmpty then
+        Runtime.getRuntime.addShutdownHook(Thread(() => server.close()))
+        while server.alive do Thread.sleep(1000L)
+        server.metadata
+      else
+        val builder = ProcessBuilder(arguments.command*).inheritIO()
+        builder.environment().put("VOCAB_ENDPOINT", server.endpoint.base.toString)
+        builder.environment().put("VOCAB_MODELS", server.endpoint.models.mkString(","))
+        val code = builder.start().waitFor()
+        Json.obj("server" -> server.metadata, "exitCode" -> Json.fromInt(code))
+    finally server.close()
 
   private def evaluate(config: Arguments, options: ProcessingOptions, helpers: Path): Json =
     Diagnostics.check(config.url.startsWith("http://") || config.url.startsWith("https://"), Path.of("omlx-url"), "URL", "expected HTTP(S) endpoint")

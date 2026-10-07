@@ -91,7 +91,7 @@ test-data の submodule は差し替える可能性が高い。特定の素材�
 | `run-external` | 外部の評価素材の CLI を、serve した endpoint に対して実行して記録する |
 | `draft-vocab` | draft 語彙の入れ替え（TensorFold） |
 | `sandbox-check` | この host で使える sandbox と、使えない理由を表示する |
-| `fetch-tools` | 評価に使う Node と TypeScript の取得（今の `setup-evaluation-tools.py`） |
+| `fetch-reference node`、`fetch-reference typescript` | 評価に使う Node と TypeScript の取得（今の `setup-evaluation-tools.py`。既存の参照データの取得に、公開された digest で照合する取得元として足す） |
 
 ## 5. 進め方
 
@@ -139,3 +139,13 @@ test-data の submodule は差し替える可能性が高い。特定の素材�
 - テスト：`sandbox.SandboxSuite`（選択の規則、Docker の起動引数、symlink を通る interpreter の tree、環境、実際の隔離とタイムアウト）と `cli.CliSuite`。
 - 参照実装との一致（実機確認、Docker）：偽の `docker` で記録した `docker run` の引数は、フラグ・mount・コマンドが一致し、環境変数は既定の `PATH` を揃えた後に一致した。同じ確認用スクリプトの結果（ネットワークなし、外への書き込みの拒否、作業ディレクトリへの書き込み、HOME、渡した環境変数）も一致した。
 - Python の `scripts/sandbox.py` は、まだ `code_checks.py` が使うので、段階 5 で一緒に削除する。
+
+## 10. 段階 3・4 の結果（推論環境、評価の段取り、速度）
+
+- `runtime` パッケージ：`InferenceRuntime`、`RunningServer`、`ServeRequest`、`ServedModel`、`Endpoint`、capability の `DraftSwitch`・`DraftStatistics`・`ModelResidency`。実装は `OMlx` と `TensorFoldClone`。起動、ready の待機、`server.json` の記録、子プロセスまでの停止は共通（`ServerProcess`）。
+- `evaluation` パッケージ：`ChatClient`（OpenAI 互換の streaming、tool call の組み立て、usage、TTFT）、`SpeedProbes`・`SpeedMeasurement`・`DraftAttribution`、`ExternalRun`。速度の prompt は固定データ `evaluation/speed-prompts.json` に移した。
+- CLI：`serve`、`measure-speed`、`run-external`（serve の option は 3 つで共有）。`scripts/flash-next/serve.sh` は `vocab-surgery serve --runtime tensorfold` の近道になった。
+- 参照実装との一致（実機確認、DGX、v4、TF の clone）：
+  - Scala の `serve` で起動した server に対する速度測定は、以前 `serve.sh` で起動したときと出力 18 本がすべて一致し、受理数も一致した。
+  - Scala の `measure-speed` は、Python の `bench.py` と `acceptance.py` と、出力 24 本・生成 token 数・受理数（ja 516/1468、en 956/1448、code 1264/1492）がすべて一致し、速度の差は 1% 前後だった。
+- Python の `scripts/flash-next/bench.py` と `acceptance.py` を削除した。

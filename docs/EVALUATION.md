@@ -73,11 +73,30 @@ evaluation directory に suite、forbidden scalars、tokenization、logits、bas
   --ratings outputs/reviews/my-first-run-ratings.json --out "$RUN/reviewed-metrics.json"
 ```
 
+## 推論環境と速度の測定
+
+`runtime` パッケージの `InferenceRuntime` が checkpoint を serve する。実装は `omlx`（macOS、比較用の entry を symlink で並べ、prefix／HF cache なし、同時実行 1、offline）と `tensorfold`（`scripts/flash-next/setup-tensorfold.sh` で作った clone、CUDA）。どちらも新しい server ディレクトリに `server.log` と `server.json`（起動したコマンド、版、option）を残し、`/v1/models` が答えるまで待ち、止めるときは子プロセスまで止める。推論環境ごとの capability（request ごとの draft の切り替え、ログからの draft の受理数、モデルのロードとアンロード）は trait で表し、持たない環境では使わない。
+
+```sh
+scripts/vocab-surgery serve --runtime tensorfold --model fn=<checkpoint> --server-dir outputs/servers/<new> -- <command…>
+scripts/vocab-surgery measure-speed --runtime tensorfold --model fn=<checkpoint> --server-dir outputs/servers/<new> --out outputs/runs/<run>/speed.json
+```
+
+- `serve` は `--` の後のコマンドを、ready の後に `VOCAB_ENDPOINT`（`http://127.0.0.1:<port>/v1`）と `VOCAB_MODELS` 付きで実行し、終わったら止める（失敗は終了コード 5）。コマンドがなければ中断されるまで serve する。
+- `measure-speed` は `evaluation/speed-prompts.json` の prompt を、draft を切り替えられる推論環境では両方のモードで、各 trial 送り、最初の warm-up を除いて decode tok/s、TTFT、生成 token 数の中央値を出す。ログから draft の受理数が取れる推論環境では、送った request と生成 token 数で照合して割り当て、prompt とモードごとの受理率と 1 round あたりの token 数を記録する。
+
 ## 外部の評価素材
 
 `test-data` submodule などの外部の評価素材は、ケースの形式、出題文の組み立て、採点、生成コードの実行、指標、runner を自分で持つ。このプロジェクトは、加工したモデルを serve して endpoint を用意し、素材が文書で公開している CLI にその endpoint を渡して実行するだけにする。素材の内部（runner、`tools/` のモジュール、ケースの形式）を import・patch・再実装しない。どの素材を使うかは実行のたびに与え、特定の素材のパスやケースの形式を手順やコードに埋め込まない（素材は差し替えうる）。境界の詳細は [EVALUATION_ARCHITECTURE.md](EVALUATION_ARCHITECTURE.md) を参照する。
 
-- 素材の runner が素材の中に結果を書く場合は、素材を run directory に複製してから実行し、元の submodule と revision を変えない。
+- `run-external` は serve した endpoint に対して素材の CLI を実行し、素材の場所・git revision・作業ディレクトリ・コマンド・終了コードを server ディレクトリの `external-run.json` に記録する。素材の結果の中身は読まない。
+
+  ```sh
+  scripts/vocab-surgery run-external --runtime tensorfold --model fn=<checkpoint> --server-dir outputs/servers/<new> \\
+    --material <素材> --copy-to outputs/runs/<run>/material -- <素材が公開しているコマンド…>
+  ```
+
+- 素材の runner が素材の中に結果を書く場合は、`--copy-to` で run directory に複製してから実行し（`.git` は複製しない）、元の submodule と revision を変えない。
 - 素材に足りない機能（Linux での生成コードの隔離実行など）は、素材の側への変更案にする。
 
 2026-10-06 の test-data の比較（[測定結果と限界](EVALUATION_TESTDATA_20261006.md)）と、2026-10-07 の Flash-Next の評価の一部は、素材の内部を取り込んでいた helper で行った。その helper は境界違反として削除した（最後に含まれるのは `f163c9b`）。

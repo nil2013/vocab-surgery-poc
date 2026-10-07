@@ -2,6 +2,7 @@ package me.nsmr.vocabsurgery.cli
 
 import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.file.{Files, Path}
+import scala.jdk.CollectionConverters.*
 import me.nsmr.vocabsurgery.processing.{CheckpointProcessor, ProcessingFixtures, ProcessingOptions, PolicyFile}
 
 class CliSuite extends munit.FunSuite:
@@ -124,4 +125,55 @@ class CliSuite extends munit.FunSuite:
     finally
       Files.deleteIfExists(directory.resolve("out.txt"))
       Files.deleteIfExists(directory)
+  }
+
+  test("serve runs a command against the endpoint once ready, stops the server and passes on a failure") {
+    val root = Files.createTempDirectory("vocab-cli-serve-")
+    try
+      val clone = me.nsmr.vocabsurgery.runtime.RuntimeFixtures.fakeClone(root)
+      val checkpoint = Files.createDirectories(root.resolve("checkpoint"))
+      val options = ProcessingOptions(outputRoot = root.resolve("outputs"))
+      def serve(name: String, script: String) = invoke(Vector("serve", "--runtime", "tensorfold", "--tensorfold-clone", clone.toString,
+        "--model", s"fn=$checkpoint", "--server-dir", root.resolve(s"outputs/servers/$name").toString,
+        "--port", me.nsmr.vocabsurgery.runtime.RuntimeFixtures.freePort().toString, "--", "sh", "-c", script), options)
+      val (code, output, _) = serve("ok", s"echo \"$$VOCAB_ENDPOINT $$VOCAB_MODELS\" > ${root.resolve("seen.txt")}")
+      assertEquals(code, 0)
+      assert(Files.readString(root.resolve("seen.txt")).trim.matches("http://127\\.0\\.0\\.1:\\d+/v1 fn"))
+      assertEquals(io.circe.jawn.parse(output).toOption.get.hcursor.get[Int]("exitCode"), Right(0))
+      assertEquals(serve("failing", "exit 3")._1, 5)
+      assertEquals(invoke(Vector("serve", "--runtime", "vllm", "--model", "a=b", "--server-dir", "x"))._1, 2)
+    finally
+      scala.util.Using.resource(Files.walk(root))(_.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.foreach(Files.deleteIfExists))
+  }
+
+  test("measure-speed serves, measures both draft modes and attributes the runtime's draft statistics; run-external records its run") {
+    val root = Files.createTempDirectory("vocab-cli-measure-")
+    try
+      val clone = me.nsmr.vocabsurgery.runtime.RuntimeFixtures.fakeClone(root)
+      val checkpoint = Files.createDirectories(root.resolve("checkpoint"))
+      val probes = root.resolve("probes.json")
+      Files.writeString(probes, """{"trials": 2, "warmups": 1, "maxTokens": 8, "temperature": 0, "prompts": [{"name": "a", "text": "hi"}]}""")
+      val options = ProcessingOptions(outputRoot = root.resolve("outputs"))
+      def serving(name: String) = Vector("--runtime", "tensorfold", "--tensorfold-clone", clone.toString, "--model", s"fn=$checkpoint",
+        "--server-dir", root.resolve(s"outputs/servers/$name").toString, "--port", me.nsmr.vocabsurgery.runtime.RuntimeFixtures.freePort().toString)
+      val (code, output, error) = invoke(Vector("measure-speed") ++ serving("speed") ++ Vector("--probes", probes.toString, "--out", root.resolve("outputs/speed.json").toString), options)
+      assertEquals(code, 0, error)
+      val result = me.nsmr.vocabsurgery.io.JsonIO.read(root.resolve("outputs/speed.json")).hcursor
+      assertEquals(result.downField("rows").as[Vector[io.circe.Json]].map(_.size), Right(4))
+      assertEquals(result.downField("drafts").downField("a/mtp").get[Int]("accepted"), Right(2))
+      assert(result.downField("drafts").downField("a/serial").failed)
+      assertEquals(result.downField("summary").downField("a/serial").downField("completionTokens").as[Vector[Int]], Right(Vector(2)))
+      assert(io.circe.jawn.parse(output).toOption.get.hcursor.downField("rows").failed)
+
+      val material = Files.createDirectories(root.resolve("material"))
+      Files.writeString(material.resolve("README.md"), "material\n")
+      val (externalCode, externalOutput, externalError) = invoke(Vector("run-external") ++ serving("external") ++ Vector("--material", material.toString,
+        "--copy-to", root.resolve("outputs/runs/material").toString, "--", "sh", "-c", "echo $VOCAB_MODELS > seen.txt"), options)
+      assertEquals(externalCode, 0, externalError)
+      assertEquals(Files.readString(root.resolve("outputs/runs/material/seen.txt")).trim, "fn")
+      assert(!Files.exists(material.resolve("seen.txt")))
+      assert(Files.isRegularFile(root.resolve("outputs/servers/external/external-run.json")))
+      assertEquals(io.circe.jawn.parse(externalOutput).toOption.get.hcursor.get[Int]("exitCode"), Right(0))
+    finally
+      scala.util.Using.resource(Files.walk(root))(_.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.foreach(Files.deleteIfExists))
   }
