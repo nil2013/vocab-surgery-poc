@@ -126,6 +126,8 @@ scripts/tf-serve.sh "$RUN/coding-pruned-v2-server.log" outputs/models/flash-next
 python3 scripts/tf_acceptance.py "$RUN/coding-pruned-v2-server.log" "$RUN/coding-pruned-v2.jsonl"
 ```
 
+2026-10-07 に元モデルと `ja-en-coding-v2` 加工モデルをこの手順で比べた結果は、[Flash-Next の serve 比較](EVALUATION_FLASH_NEXT_20261007.md)にある。
+
 ## 2026-10-06 の実行確認
 
 固定 Qwen snapshot を 512 MiB JVM heap で加工し、K=128,803、全 1,891 tensors の byte 対応、payload 44,790,761,728 bytes、参照 tokenizer の検証に成功した。未対象の 7 shards は APFS clone。論理 model bytes は 44,855,965,826 → 44,795,576,221、payload 削減は 53,298,432 bytes。
