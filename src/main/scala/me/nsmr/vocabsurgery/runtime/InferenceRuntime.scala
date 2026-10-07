@@ -114,3 +114,23 @@ private[runtime] object ServerProcess:
       if !process.waitFor(30L, TimeUnit.SECONDS) then process.destroyForcibly()
       descendants.filter(_.isAlive).foreach(_.destroyForcibly())
       process.waitFor(10L, TimeUnit.SECONDS)
+
+/** The peak resident memory of a process, sampled with `ps` every `interval` until closed (None until a sample). */
+final class ResourceSampler(pid: Long, interval: scala.concurrent.duration.FiniteDuration = 250.millis) extends AutoCloseable:
+  @volatile private var peak: Option[Long] = None
+  @volatile private var running = true
+  private val thread = Thread(() =>
+    while running do
+      try
+        val process = ProcessBuilder("ps", "-o", "rss=", "-p", pid.toString).redirectErrorStream(true).start()
+        val text = String(process.getInputStream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8).trim
+        if process.waitFor(5L, TimeUnit.SECONDS) && text.nonEmpty && text.forall(_.isDigit) then
+          peak = Some(math.max(peak.getOrElse(0L), text.toLong * 1024))
+      catch case _: java.io.IOException => ()
+      Thread.sleep(interval.toMillis))
+  thread.setDaemon(true)
+  thread.start()
+  def peakBytes: Option[Long] = peak
+  def close(): Unit =
+    running = false
+    thread.join(5000L)

@@ -1,22 +1,22 @@
-# oMLX の before／after 評価
+# 元モデルと加工モデルの比較評価
 
-実行主体はこの Mac の oMLX と MLX。Scala CLI は先に manifest を全面再検証し、ICU の scalar predicate から `forbidden-codepoints.json` を生成してから Python helper に渡す。Python 自身の Unicode 版に削除判定を依存させない。加工手順は [README](../README.md)、判定基準は [仕様書](../outputs/SPEC.md) を参照。
+`scripts/vocab-surgery evaluate` は、manifest を全面再検証してから、元モデルと加工モデルを推論環境（`--runtime omlx|tensorfold`）で順に serve し、このプロジェクトの固定 suite で比較する。削除判定は Scala の policy（ICU の scalar predicate）から取り、Python 自身の Unicode 版に依存させない。加工手順は [README](../README.md)、判定基準は [仕様書](../outputs/SPEC.md)、境界は [EVALUATION_ARCHITECTURE.md](EVALUATION_ARCHITECTURE.md) を参照。
 
 ## 前提と固定入力
 
-`--python` には `omlx`、`mlx`、`mlx-lm`、`tokenizers`、`transformers`、`numpy` が利用できる interpreter を指定する。この workspace では `/opt/homebrew/Cellar/omlx/0.7.0rc1/libexec/bin/python3.11` を実行確認した。インストールは評価コマンドでは行わない。
+`--python` には `tokenizers`、`transformers`（`--logits` では加えて `mlx`、`mlx-lm`、`numpy`）が使える interpreter を指定する。Python は参照実装（chat template を適用した tokenization の比率、出力位置の token、logits、参照 tokenizer の検証）だけに使う。インストールは評価コマンドでは行わない。oMLX で serve するときは `--omlx-python` に `omlx` が入った interpreter を指定する。
 
-[default-suite.jsonl](../evaluation/default-suite.jsonl) は日本語 20、Python／Scala／TypeScript 各 10、FIM 10、tool-call 10、混入用 30 prompts の固定 100 件。日本語は説明・要約と multi-turn、混入用は日本語・code の自発的な出力を対象とする。期待する関数テストも固定する。`make-suite.py` は同じ定義から新しい JSONL を作る helper であり、評価途中で suite を変更しない。
+[default-suite.jsonl](../evaluation/default-suite.jsonl) は日本語 20、Python／Scala／TypeScript 各 10、FIM 10、tool-call 10、混入用 30 prompts の固定 100 件。日本語は説明・要約と multi-turn、混入用は日本語・code の自発的な出力を対象とする。期待する関数テストも固定する。suite は固定データであり、評価途中で変更しない。
 
-Scala は `sbt --batch stageCli` で固定版 compiler jars を配置する。TypeScript は次の明示的な setup を一度実行する。Node v24.21.0 と TypeScript 6.0.2 を公式 Node 配布元と npm registry から取得し、SHA-256／SHA-512 integrity を検証して `outputs/tools` に展開する。既存出力は上書きしない。Python 3.11 以降を使用する。
+Scala の関数テストは `sbt --batch stageCli` で配置した固定版 compiler jars を使う。TypeScript は Node と TypeScript を参照データと同じ取得で一度だけ用意する。Node は公式配布元の `SHASUMS256.txt`、TypeScript は npm registry の SHA-512 integrity と照合し、`outputs/reference/<name>/<version>` に展開する。既存の出力は上書きしない。
 
 ```sh
 sbt --batch stageCli
-python3 scripts/setup-evaluation-tools.py
-python3 -m unittest discover -s scripts/tests -v
+scripts/vocab-surgery fetch-reference node         # 24.21.0
+scripts/vocab-surgery fetch-reference typescript   # 6.0.2
 ```
 
-生成 code は `sandbox` パッケージ（`src/main/scala/me/nsmr/vocabsurgery/sandbox/Sandbox.scala`）の `Sandbox` を通して実行する。`scripts/vocab-surgery sandbox-check` で、この host で使える実装と使えない理由を表示し、`sandbox-run --work-dir DIR [--readable TREE]... [--env NAME=VALUE]... -- COMMAND...` で任意のコマンドを隔離して実行する（実行したコマンドが失敗すると終了コード 5）。Python の [sandbox.py](../scripts/sandbox.py) は参照実装で、`code_checks.py` を移すまで残す。どの実装も、ネットワークを遮断し、書き込みを使い捨ての作業 directory（HOME・TMPDIR・XDG の各 directory もそこに置く）に限り、読み取りをシステムと呼び出し側が渡した tree に限る。API key は子の環境に渡さない。Python は固定 asserts、Scala はコンパイル後の asserts、TypeScript は strict compile 後の Node VM tests を使う。timeout と heap 制限を設定する。
+生成 code は `sandbox` パッケージ（`src/main/scala/me/nsmr/vocabsurgery/sandbox/Sandbox.scala`）の `Sandbox` を通して実行する。`scripts/vocab-surgery sandbox-check` で、この host で使える実装と使えない理由を表示し、`sandbox-run --work-dir DIR [--readable TREE]... [--env NAME=VALUE]... -- COMMAND...` で任意のコマンドを隔離して実行する（実行したコマンドが失敗すると終了コード 5）。どの実装も、ネットワークを遮断し、書き込みを使い捨ての作業 directory（HOME・TMPDIR・XDG の各 directory もそこに置く）に限り、読み取りをシステムと呼び出し側が渡した tree に限る。API key は子の環境に渡さない。Python は固定 asserts、Scala はコンパイル後の asserts、TypeScript は strict compile 後の Node VM tests を使う。timeout と heap 制限を設定する。
 
 | 実装 | host | 方式 |
 | --- | --- | --- |
@@ -25,38 +25,27 @@ python3 -m unittest discover -s scripts/tests -v
 
 `Sandbox.platform()` は `VOCAB_SANDBOX` または `--sandbox`（`auto`、`sandbox-exec`、`docker`）に従い、`auto` では host の OS で使える実装を選ぶ。使える実装がなければ実行を停止し、無制限実行に切り替えない。
 
-## 専用 server と CLI
-
-既存 oMLX server の設定変更は不要。helper は新しい directory に比較用 entry を作り、loopback・同時実行 1・prefix／SSD cache 無効の独立 server を起動する。entry の symlink は比較用登録だけに使い、加工モデル内のファイルは独立した regular files のまま。
+## 実行
 
 ```sh
-EVAL_PYTHON=/opt/homebrew/Cellar/omlx/0.7.0rc1/libexec/bin/python3.11
 RUN=outputs/runs/my-first-run
-"$EVAL_PYTHON" scripts/serve-evaluation.py --manifest "$RUN/manifest.json" --server-dir outputs/servers/my-first-run --port 8302
+scripts/vocab-surgery evaluate --manifest "$RUN/manifest.json" --python .venv/bin/python \
+  --runtime omlx --omlx-python /opt/homebrew/Cellar/omlx/0.7.0rc1/libexec/bin/python3.11 \
+  --evaluation-out "$RUN/evaluation" --trials 5 --warmups 1
 ```
 
-起動結果の PID、`server.json`、`server.log` を確認する。server がモデル探索を終えて応答するまで待ち、`curl http://127.0.0.1:8302/v1/models` で `baseline` と `pruned` が見えることを確認してから実行する。
+- 元モデルを `baseline`、加工モデルを `pruned` という名前で、それぞれ専用の server（`$RUN/evaluation/servers/baseline`、`…/pruned`）に serve する。loopback、同時実行 1。元モデルの測定を終えて server を止めてから加工モデルを起動するので、2 つのモデルが同時に常駐しない。
+- prefix cache は使わない。oMLX は `--no-cache`、TensorFold clone は `--prompt-cache-gib 0`（patch 0004）で起動する。cache hit が報告された応答、欠けた SSE 終端・usage・finish reason、過大な stream は失敗条件。
+- `--extra` は全 request に足す JSON object（例：`{"chat_template_kwargs":{"enable_thinking":false}}`）。`--suite` で別の固定 suite を指定できる。`--logits` で `scripts/logits.py`（MLX）による logits の比較も行う。
+- 失敗したときもログと部分成果物を残す。再実行には新しい evaluation directory を使う。
 
-```sh
-scripts/vocab-surgery evaluate --manifest "$RUN/manifest.json" --python "$EVAL_PYTHON" \
-  --suite evaluation/default-suite.jsonl --omlx-url http://127.0.0.1:8302 \
-  --baseline-model baseline --pruned-model pruned \
-  --evaluation-out "$RUN/evaluation" --server-environment outputs/servers/my-first-run/server.json \
-  --trials 5 --warmups 1 --timeout-seconds 3600
-```
-
-`--api-key-env` は credential の値ではなく環境変数名を受け付ける。default は `OMLX_API_KEY`。URL に credential、query、fragment を埋め込まない。`--server-environment` を省略すると server version と RSS は取得できない。client の package version を server version と同一視しない。
-
-評価は明示した 2 モデルを unload し、baseline → pruned の順にロードして各段階の最後に unload する。cache hit が報告された応答、欠けた SSE 終端・usage・finish reason、過大な stream は失敗条件。helper 失敗はログと部分成果物を保持する。再実行は新しい evaluation directory を使う。
-
-専用 server は評価後も起動状態を保つ。終了時は `server.json` の PID、`ps -p <PID> -o command=` の oMLX process、`lsof -p <PID>` に現れるその directory の `server.log` を確認し、`kill -TERM <PID>` を実行する。oMLX は process title を変更する場合があるため、command 表示だけで起動 directory を判断しない。他の oMLX process は対象にしない。
-
+## 測定と判定
 ## 測定と判定
 
 - **静的／参照検証**: 全 1,891 tensors の byte 対応、全 file hashes、連続 ID、BPE、全 added tokens の単一 ID、10,086 字の NFC、round trip、multi-turn／tool の chat template。同梱 Python の固定 token ID assignment も点検する。
 - **logits**: source と pruned を別 worker で逐次ロードし、fresh cache と同じ残存 ID 列で raw logits を比較する。4 固定入力のうち tokenizer projection が一致するものだけを採用し、非一致入力は skip 理由を残す。`abs(a-b) <= .01 + .001*abs(a)` を固定し、source 反復比較、誤差、超過数、最初の超過、上位 margin を記録する。引き上げは自動で行わない。
-- **速度**: 生テキストの oMLX stream と、同じ ID 列による MLX teacher-forced 測定を区別する。suite 内の日本語／code の短・中・長 6 ケースは warm-up 後 5 回。native usage の prefill／decode tok/s、TTFT、全時間、scalar/s、入力 category／長さ別の中央値・p95・範囲を保存する。teacher-forced は 4 固定入力で 16 decode tokens、warm-up 1 回と測定 5 回。
-- **memory／サイズ**: MLX worker の peak allocated と peak RSS、指定 server PID の sampled RSS を別々に記録する。OS 全体の unified memory や APFS clone の固有物理 bytes は測定できておらず null。論理 file bytes と payload 削減見積もりは記録する。RSS はサンプリング間隔 .25 秒なので短い peak を見逃し得る。
+- **速度**: 生テキストを送る推論環境の stream と、`--logits` での同じ ID 列による MLX teacher-forced 測定を区別する。suite 内の日本語／code の短・中・長 6 ケースは warm-up 後 5 回。native usage の prefill／decode tok/s、TTFT、全時間、scalar/s、入力 category／長さ別の中央値・p95・範囲を保存する。teacher-forced は 4 固定入力で 16 decode tokens、warm-up 1 回と測定 5 回。
+- **memory／サイズ**: `--logits` の MLX worker の peak allocated と peak RSS、各段階の server PID の sampled RSS を別々に記録する。OS 全体の unified memory や APFS clone の固有物理 bytes は測定できておらず null。論理 file bytes と payload 削減見積もりは記録する。RSS はサンプリング間隔 .25 秒なので短い peak を見逃し得る。
 - **品質**: code の実行テスト、FIM の prefix／completion／suffix、tool parser と tool response 後の応答を検査する。日本語の 5 段階目視評価は未入力なら `pending-human-review`。自動採点で埋めない。
 - **混入／分岐**: sampling は混入 prompts 各 5 回。reasoning と tool arguments も scalar の分母に含め、禁止 scalar 比率、1 文字以上を含む出力率、理由別内訳を残す。基準側の混入が 0 なら減少は観測不能。greedy 分岐の候補判定は API が raw generated IDs を返さないため decoded text の再 tokenize による推定と明記する。
 
@@ -64,12 +53,12 @@ CLI の終了コードは 0=処理成功、1=実行失敗、2=引数エラー、
 
 ## 保存結果と目視評価
 
-evaluation directory に suite、forbidden scalars、tokenization、logits、baseline／pruned の raw JSONL、helper log、environment、metrics、ratings template、`REPORT.md` を保存する。サブプロセスは model を同時常駐させない。全件 suite は benchmark の繰り返しを含むため、各段階の出力は 100 行より多くなる。
+evaluation directory に suite、tokenization、baseline／pruned の応答（`baseline.jsonl`、`pruned.jsonl`）、各 server の `server.log` と `server.json`、environment、metrics、ratings template、`REPORT.md` を保存する。全件 suite は benchmark と sampling の繰り返しを含むため、各段階の出力は 100 行より多くなる。
 
-`ratings-template.json` を別ファイルへコピーし、全日本語 ID に baseline／pruned の 1〜5 点と `majorBreakdown` を記入する。未記入、重複、欠落 ID は拒否する。元の測定値を上書きせず、新 report に集計できる。
+`ratings-template.json` を別ファイルへコピーし、全日本語 ID に baseline／pruned の 1〜5 点と `majorBreakdown` を記入する。未記入、重複、欠落 ID は拒否する。元の測定値を上書きせず、推論なしで新しい metrics に集計し直す。
 
 ```sh
-"$EVAL_PYTHON" scripts/review-evaluation.py --evaluation "$RUN/evaluation" \
+scripts/vocab-surgery review --evaluation "$RUN/evaluation" \
   --ratings outputs/reviews/my-first-run-ratings.json --out "$RUN/reviewed-metrics.json"
 ```
 

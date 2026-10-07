@@ -22,8 +22,7 @@ class CliSuite extends munit.FunSuite:
 
   test("unknown commands, missing options and invalid counts fail with argument exit code") {
     Vector(Vector("oops"), Vector("plan"), Vector("apply", "--plan", "x", "--model-out", "y"), Vector("inspect", "--wat"),
-      Vector("evaluate", "--manifest", "x", "--python", "p", "--suite", "s", "--omlx-url", "http://localhost", "--baseline-model", "b",
-        "--pruned-model", "p", "--evaluation-out", "o", "--trials", "0")).foreach { args =>
+      Vector("evaluate", "--manifest", "x", "--python", "p", "--suite", "s", "--runtime", "tensorfold", "--evaluation-out", "o", "--trials", "0")).foreach { args =>
       assertEquals(invoke(args)._1, 2)
     }
   }
@@ -58,7 +57,7 @@ class CliSuite extends munit.FunSuite:
     }
   }
 
-  test("evaluate preserves a failed numeric gate as exit 4 and refuses an existing evaluation directory") {
+  test("evaluate serves both phases, keeps a failed logits gate as exit 4 and refuses an existing evaluation directory") {
     ProcessingFixtures.withModel { (directory, input, output) =>
       val options = ProcessingOptions(outputRoot = output)
       val run = output.resolve("runs/evaluate")
@@ -67,17 +66,34 @@ class CliSuite extends munit.FunSuite:
       val helpers = directory.resolve("helpers")
       Files.createDirectory(helpers)
       Files.writeString(helpers.resolve("check_tokenizer.py"), "import json,sys\nfrom pathlib import Path\nPath(sys.argv[sys.argv.index('--report')+1]).write_text(json.dumps({'passed':True}))\n")
-      Files.writeString(helpers.resolve("evaluate.py"), "import json,sys\nfrom pathlib import Path\n(Path(sys.argv[sys.argv.index('--output')+1])/'metrics.json').write_text(json.dumps({'logits':{'passed':False}}))\n")
+      Files.writeString(helpers.resolve("tokenization.py"), "import json,sys\nfrom pathlib import Path\nout=Path(sys.argv[sys.argv.index('--out')+1])\n" +
+        "out.write_text(json.dumps({'suite':[{'id':'ja-1','category':'japanese','baselineTokens':4,'prunedTokens':4,'ratio':1.0,'identicalProjectedIds':True}],'versions':{},'locate':[]}[sys.argv[1]]))\n")
+      Files.writeString(helpers.resolve("logits.py"), "import json,sys\nfrom pathlib import Path\nout=Path(sys.argv[sys.argv.index('--output')+1])\nout.mkdir()\n" +
+        "(out/'logits-summary.json').write_text(json.dumps({'passed':False}))\nsys.exit(1)\n")
       val suite = directory.resolve("suite.jsonl")
-      Files.writeString(suite, "{}\n")
+      Files.writeString(suite, """{"id":"ja-1","kind":"chat","category":"japanese","maxTokens":8,"messages":[{"role":"user","content":"こんにちは"}]}""" + "\n" +
+        """{"id":"mix-1","kind":"chat","category":"contamination","maxTokens":8,"sampling":true,"messages":[{"role":"user","content":"x"}]}""" + "\n")
+      val clone = me.nsmr.vocabsurgery.runtime.RuntimeFixtures.fakeClone(directory)
       val args = Vector("evaluate", "--manifest", run.resolve("manifest.json").toString, "--python", "python3", "--suite", suite.toString,
-        "--omlx-url", "http://127.0.0.1:8302", "--baseline-model", "baseline", "--pruned-model", "pruned",
-        "--evaluation-out", run.resolve("evaluation").toString)
-      val (code, text, _) = invoke(args, options, helpers)
-      assertEquals(code, 4)
-      assert(text.contains("\"passed\":false"))
+        "--evaluation-out", run.resolve("evaluation").toString, "--trials", "2", "--logits", "--runtime", "tensorfold",
+        "--tensorfold-clone", clone.toString, "--port", me.nsmr.vocabsurgery.runtime.RuntimeFixtures.freePort().toString)
+      val (code, text, error) = invoke(args, options, helpers)
+      assertEquals(code, 4, error)
+      val metrics = io.circe.jawn.parse(text).toOption.get.hcursor
+      assertEquals(metrics.downField("logits").get[Boolean]("passed"), Right(false))
+      assertEquals(metrics.downField("phases").downField("pruned").get[Int]("contaminationOutputs"), Right(2))
+      assertEquals(metrics.downField("tokenization").get[Double]("median"), Right(1.0))
+      assertEquals(metrics.get[Boolean]("tokenizationGate"), Right(true))
+      Vector("baseline.jsonl", "pruned.jsonl", "tokenizer.jsonl", "environment.json", "metrics.json", "ratings-template.json", "REPORT.md",
+        "servers/baseline/server.json", "servers/pruned/server.json").foreach(name => assert(Files.isRegularFile(run.resolve("evaluation").resolve(name)), name))
+      assert(Files.readString(run.resolve("evaluation/servers/pruned/server.json")).contains("--prompt-cache-gib"))
       assertEquals(invoke(args, options, helpers)._1, 1)
-      assert(Files.isRegularFile(run.resolve("evaluation/forbidden-codepoints.json")))
+      val ratings = directory.resolve("ratings.json")
+      Files.writeString(ratings, """[{"id":"ja-1","baseline":4,"pruned":4,"majorBreakdown":false}]""")
+      val (reviewed, review, _) = invoke(Vector("review", "--evaluation", run.resolve("evaluation").toString, "--ratings", ratings.toString,
+        "--out", output.resolve("runs/evaluate/reviewed.json").toString), options)
+      assertEquals(reviewed, 0)
+      assertEquals(io.circe.jawn.parse(review).toOption.get.hcursor.downField("japaneseQuality").get[String]("state"), Right("reviewed"))
     }
   }
 

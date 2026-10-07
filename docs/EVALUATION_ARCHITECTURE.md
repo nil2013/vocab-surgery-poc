@@ -149,3 +149,18 @@ test-data の submodule は差し替える可能性が高い。特定の素材�
   - Scala の `serve` で起動した server に対する速度測定は、以前 `serve.sh` で起動したときと出力 18 本がすべて一致し、受理数も一致した。
   - Scala の `measure-speed` は、Python の `bench.py` と `acceptance.py` と、出力 24 本・生成 token 数・受理数（ja 516/1468、en 956/1448、code 1264/1492）がすべて一致し、速度の差は 1% 前後だった。
 - Python の `scripts/flash-next/bench.py` と `acceptance.py` を削除した。
+
+## 11. 段階 5 の結果（自前の固定 suite、比較、ツールの取得）
+
+- `evaluation` パッケージ：`QualitySuite`（`SuiteCase`、`CaseCategory`、`CodeTask`、`FunctionTest`、`ExpectedTool`）、`CodeChecks` と `Toolchains`（Python、Scala、TypeScript。実行は必ず `Sandbox` を通す。Rust はまだない）、`Comparison`（段階ごとに推論環境で serve し、warm-up、繰り返し、禁止 scalar の数え上げ、コードの採点、tool の追質問、server の RSS の標本、集計、`review` での再集計）、`ComparisonReferences`（B3 の参照実装の結果）。
+- `runtime`：`ResourceSampler`（server の PID の RSS）。`TensorFoldClone` に `promptCache`（`false` で `--prompt-cache-gib 0`）を足した。clone の patch 0004 で、qwen4_exp の CUDA の serve が `--prompt-cache-gib 0` で prefix を再利用しなくなる。比較では毎回 prompt 全体を prefill させ、cache hit の応答は失敗とする。
+- 参照データの取得：`fetch-reference node`（公式の `SHASUMS256.txt`）と `fetch-reference typescript`（npm registry の SHA-512 integrity）。公開された digest での照合（`PublishedDigest`）と、展開したディレクトリの tree digest を足した。
+- B3 の参照実装：`scripts/tokenization.py`（`suite`：chat template を適用した前後の token 数と ID の対応、`locate`：出力位置の token、`versions`）。logits は従来どおり `scripts/logits.py`（`--logits` のときだけ）。
+- CLI：`evaluate`（`--runtime omlx|tensorfold` を含む推論環境の option を共有）、`review`。
+- 参照実装との一致（実機確認、DGX、Flash-Next の元モデルと v4、TF の clone）：
+  - Scala の `evaluate` の出力（各段階 244 行）に Python の `evaluate.summarize` を当てた結論と値が、`metrics.json` と一致した（Scala だけが足す、出力位置の token の注記を除く）。
+  - 実際の生成コード 104 行の採点は、Python の `code_checks.check` と合否がすべて一致した。baseline の 40 ケースの応答から作った 160 通り（元の応答、構文を壊したもの、値を変えたもの、空）でも一致し、不合格の判定を含む。
+  - Node と TypeScript は、`setup-evaluation-tools.py` と同じ binary と digest を取得した。
+- このときの結果：coding 30/30、FIM 10/10、tool 10/10（両方）。混入用 150 出力のうち禁止 scalar を含む出力は 3 → 0。日本語の目視評価は未入力。TF の usage には prefill／decode の速度がないので、suite 内の速度は TTFT、全時間、scalar/s だけが値を持つ。
+- テスト：`evaluation.OwnSuiteSuite`、`processing.ProcessingSuite`（ツールの取得）、`cli.CliSuite`（偽の helper と推論環境での `evaluate`・`review`）。Python 側は `scripts/tests/test_references.py`（`check_tokenizer.py`、`logits.py`、`tokenization.py`）。
+- Python の `sandbox.py`、`code_checks.py`、`evaluate.py`、`review-evaluation.py`、`make-suite.py`、`serve-evaluation.py`、`setup-evaluation-tools.py` と、そのテストを削除した。

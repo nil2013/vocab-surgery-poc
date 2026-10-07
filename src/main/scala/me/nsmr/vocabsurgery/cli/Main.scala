@@ -3,6 +3,8 @@ package me.nsmr.vocabsurgery.cli
 import io.circe.Json
 import java.io.PrintStream
 import java.nio.file.{Files, Path}
+import scala.jdk.CollectionConverters.*
+import scala.util.Using
 import scala.util.control.NonFatal
 import scopt.{DefaultOEffectSetup, OParser}
 import me.nsmr.vocabsurgery.io.*
@@ -12,26 +14,25 @@ import me.nsmr.vocabsurgery.sandbox.*
 /** Parsed CLI values; required-option and count validation belongs to the scopt command schema. */
 final case class Arguments(command: String = "", source: Path = Path.of("."), runDirectory: Path = Path.of("."),
     policy: Option[Path] = None, plan: Path = Path.of("."), modelOutput: Path = Path.of("."),
-    manifest: Path = Path.of("."), python: Path = Path.of("python3"), report: Option[Path] = None, suite: Path = Path.of("."),
-    url: String = "", baselineModel: String = "", prunedModel: String = "", evaluationOutput: Path = Path.of("."),
+    manifest: Path = Path.of("."), python: Path = Path.of("python3"), report: Option[Path] = None, suite: Path = Path.of("evaluation/default-suite.jsonl"),
+    evaluationOutput: Path = Path.of("."), extra: Option[String] = None, logits: Boolean = false, ratings: Option[Path] = None,
     ids: Path = Path.of("."), idsOutput: Path = Path.of("."), referenceName: String = "", referenceVersion: Option[String] = None, sha256: Option[String] = None,
     profileSource: Option[Path] = None, profileText: Option[String] = None, kanjiDirectory: Path = Path.of("kanji-data"),
     unihanDirectory: Option[Path] = None, jmdictDirectory: Option[Path] = None,
-    apiKeyEnvironment: String = "OMLX_API_KEY", trials: Int = 5, warmups: Int = 1, timeout: Int = 3600, copyOnly: Boolean = false,
-    serverEnvironment: Option[Path] = None, sandbox: SandboxArguments = SandboxArguments(), serve: ServeArguments = ServeArguments())
+    trials: Int = 5, warmups: Int = 1, copyOnly: Boolean = false, sandbox: SandboxArguments = SandboxArguments(), serve: ServeArguments = ServeArguments())
 
 /** Options of the serve command; runtime-specific ones apply only to their runtime. */
 final case class ServeArguments(runtime: String = "", models: Vector[(String, Path)] = Vector.empty, serverDirectory: Path = Path.of("."),
     port: Int = 18080, readyTimeoutSeconds: Int = 1800, python: Path = Path.of("python3"), cloneDirectory: Path = Path.of("outputs/tensorfold"),
     context: Int = 65536, pleOnSsd: Boolean = true, draftVocabulary: Option[Path] = None, cudaHome: Path = Path.of("/usr/local/cuda"),
-    command: Vector[String] = Vector.empty, probes: Path = Path.of("evaluation/speed-prompts.json"), output: Option[Path] = None,
+    promptCache: Boolean = true, command: Vector[String] = Vector.empty, probes: Path = Path.of("evaluation/speed-prompts.json"), output: Option[Path] = None,
     material: Path = Path.of("."), copyTo: Option[Path] = None):
   def request: me.nsmr.vocabsurgery.runtime.ServeRequest =
     me.nsmr.vocabsurgery.runtime.ServeRequest(models.map((name, path) => me.nsmr.vocabsurgery.runtime.ServedModel(name, path)), serverDirectory, port,
       scala.concurrent.duration.FiniteDuration(readyTimeoutSeconds.toLong, "seconds"))
   def inferenceRuntime: me.nsmr.vocabsurgery.runtime.InferenceRuntime = runtime match
     case "omlx" => me.nsmr.vocabsurgery.runtime.OMlx(python)
-    case "tensorfold" => me.nsmr.vocabsurgery.runtime.TensorFoldClone(cloneDirectory, context, pleOnSsd, draftVocabulary, cudaHome)
+    case "tensorfold" => me.nsmr.vocabsurgery.runtime.TensorFoldClone(cloneDirectory, context, pleOnSsd, draftVocabulary, cudaHome, promptCache)
     case other => throw IllegalArgumentException(s"unknown runtime $other; choose omlx or tensorfold")
 
 /** Options of the sandbox commands. */
@@ -47,20 +48,22 @@ object Main:
     def python = opt[String]("python").required().valueName("<interpreter>").action((v, c) => c.copy(python = Path.of(v)))
       .text("Python with tokenizers and transformers installed; no packages are downloaded")
     def manifest = opt[String]("manifest").required().action((v, c) => c.copy(manifest = Path.of(v)))
-    def serveOptions: Seq[OParser[?, Arguments]] = Seq(
+    def runtimeOptions: Seq[OParser[?, Arguments]] = Seq(
         opt[String]("runtime").required().action((v, c) => c.copy(serve = c.serve.copy(runtime = v)))
           .validate(v => if Set("omlx", "tensorfold")(v) then success else failure("--runtime must be omlx or tensorfold")).text("omlx | tensorfold"),
-        opt[String]("model").required().unbounded().valueName("NAME=CHECKPOINT").action((v, c) => c.copy(serve = c.serve.copy(models =
-          c.serve.models :+ (v.takeWhile(_ != '=') -> Path.of(v.dropWhile(_ != '=').drop(1)))))).validate(v => if v.contains('=') then success else failure("--model needs NAME=CHECKPOINT")),
-        opt[String]("server-dir").required().action((v, c) => c.copy(serve = c.serve.copy(serverDirectory = Path.of(v)))).text("New directory under outputs for server.log and server.json"),
         opt[Int]("port").action((v, c) => c.copy(serve = c.serve.copy(port = v))).text("Loopback port; default 18080"),
         opt[Int]("ready-timeout-seconds").action((v, c) => c.copy(serve = c.serve.copy(readyTimeoutSeconds = v))).validate(v => if v > 0 then success else failure("timeout must be positive")),
-        opt[String]("python").action((v, c) => c.copy(serve = c.serve.copy(python = Path.of(v)))).text("omlx: Python with omlx installed"),
+        opt[String]("omlx-python").action((v, c) => c.copy(serve = c.serve.copy(python = Path.of(v)))).text("omlx: Python with omlx installed; default python3"),
         opt[String]("tensorfold-clone").action((v, c) => c.copy(serve = c.serve.copy(cloneDirectory = Path.of(v)))).text("tensorfold: clone from scripts/flash-next/setup-tensorfold.sh; default outputs/tensorfold"),
         opt[Int]("context").action((v, c) => c.copy(serve = c.serve.copy(context = v))).text("tensorfold: prompt and reply window; default 65536"),
         opt[Unit]("no-ple-on-ssd").action((_, c) => c.copy(serve = c.serve.copy(pleOnSsd = false))).text("tensorfold: keep the PLE tables in memory"),
         opt[String]("draft-vocab").action((v, c) => c.copy(serve = c.serve.copy(draftVocabulary = Some(Path.of(v))))).text("tensorfold: draft list of upstream token ids"),
-        opt[String]("cuda-home").action((v, c) => c.copy(serve = c.serve.copy(cudaHome = Path.of(v)))).text("tensorfold: CUDA toolkit; default /usr/local/cuda"))
+        opt[String]("cuda-home").action((v, c) => c.copy(serve = c.serve.copy(cudaHome = Path.of(v)))).text("tensorfold: CUDA toolkit; default /usr/local/cuda"),
+        opt[Unit]("no-prompt-cache").action((_, c) => c.copy(serve = c.serve.copy(promptCache = false))).text("tensorfold: prefill every prompt whole (patch 0004)"))
+    def serveOptions: Seq[OParser[?, Arguments]] = runtimeOptions ++ Seq(
+        opt[String]("model").required().unbounded().valueName("NAME=CHECKPOINT").action((v, c) => c.copy(serve = c.serve.copy(models =
+          c.serve.models :+ (v.takeWhile(_ != '=') -> Path.of(v.dropWhile(_ != '=').drop(1)))))).validate(v => if v.contains('=') then success else failure("--model needs NAME=CHECKPOINT")),
+        opt[String]("server-dir").required().action((v, c) => c.copy(serve = c.serve.copy(serverDirectory = Path.of(v)))).text("New directory under outputs for server.log and server.json"))
     def sandboxChoice = opt[String]("sandbox").action((v, c) => c.copy(sandbox = c.sandbox.copy(choice = Some(v))))
       .validate(v => if SandboxChoice.values.exists(_.name == v) then success else failure(s"--sandbox must be one of ${SandboxChoice.values.map(_.name).mkString(", ")}"))
       .text("auto (default, or VOCAB_SANDBOX), sandbox-exec or docker")
@@ -99,17 +102,20 @@ object Main:
         opt[String]("jmdict").action((v, c) => c.copy(jmdictDirectory = Some(Path.of(v)))).text("Default: newest fetched JMdict"),
         checkConfig(c => if c.command == "profile-han" && c.profileSource.isDefined == c.profileText.isDefined
           then failure("profile-han needs exactly one of --source and --text") else success)),
-      cmd("evaluate").action((_, c) => c.copy(command = "evaluate")).text("Compare source and pruned models through an explicitly supplied oMLX server").children(
-        manifest, python, opt[String]("suite").required().action((v, c) => c.copy(suite = Path.of(v))),
-        opt[String]("omlx-url").required().action((v, c) => c.copy(url = v)),
-        opt[String]("baseline-model").required().action((v, c) => c.copy(baselineModel = v)),
-        opt[String]("pruned-model").required().action((v, c) => c.copy(prunedModel = v)),
-        opt[String]("evaluation-out").required().action((v, c) => c.copy(evaluationOutput = Path.of(v))),
-        opt[String]("api-key-env").action((v, c) => c.copy(apiKeyEnvironment = v)).text("Name of environment variable containing the key; default OMLX_API_KEY"),
-        opt[String]("server-environment").action((v, c) => c.copy(serverEnvironment = Some(Path.of(v)))).text("Dedicated server.json for version and sampled process RSS"),
-        opt[Int]("trials").action((v, c) => c.copy(trials = v)).validate(v => if v > 0 then success else failure("trials must be positive")),
-        opt[Int]("warmups").action((v, c) => c.copy(warmups = v)).validate(v => if v >= 0 then success else failure("warmups cannot be negative")),
-        opt[Int]("timeout-seconds").action((v, c) => c.copy(timeout = v)).validate(v => if v > 0 then success else failure("timeout must be positive"))),
+      cmd("evaluate").action((_, c) => c.copy(command = "evaluate"))
+        .text("Compare a manifest's source and pruned models on the fixed suite, serving each in turn with an inference runtime").children(
+        (Seq(manifest, python.text("Python with tokenizers and transformers (and MLX for --logits); the reference implementations run on it"),
+          opt[String]("suite").action((v, c) => c.copy(suite = Path.of(v))).text("Default evaluation/default-suite.jsonl"),
+          opt[String]("evaluation-out").required().action((v, c) => c.copy(evaluationOutput = Path.of(v))).text("New directory under outputs"),
+          opt[Int]("trials").action((v, c) => c.copy(trials = v)).validate(v => if v > 0 then success else failure("trials must be positive")),
+          opt[Int]("warmups").action((v, c) => c.copy(warmups = v)).validate(v => if v >= 0 then success else failure("warmups cannot be negative")),
+          opt[String]("extra").action((v, c) => c.copy(extra = Some(v))).text("JSON object added to every request, e.g. {\"chat_template_kwargs\":{\"enable_thinking\":false}}"),
+          opt[Unit]("logits").action((_, c) => c.copy(logits = true)).text("Also compare surviving logits with scripts/logits.py (needs MLX)"),
+          sandboxChoice) ++ runtimeOptions)*),
+      cmd("review").action((_, c) => c.copy(command = "review")).text("Recompute a comparison's conclusions with complete human ratings, without inference").children(
+        opt[String]("evaluation").required().action((v, c) => c.copy(evaluationOutput = Path.of(v))),
+        opt[String]("ratings").required().action((v, c) => c.copy(ratings = Some(Path.of(v)))),
+        opt[String]("out").required().action((v, c) => c.copy(report = Some(Path.of(v)))).text("New metrics JSON under outputs")),
       cmd("sandbox-check").action((_, c) => c.copy(command = "sandbox-check"))
         .text("Show which sandbox would confine generated code here (VOCAB_SANDBOX or --sandbox) and why others cannot").children(sandboxChoice),
       cmd("sandbox-run").action((_, c) => c.copy(command = "sandbox-run"))
@@ -136,13 +142,14 @@ object Main:
           opt[String]("copy-to").action((v, c) => c.copy(serve = c.serve.copy(copyTo = Some(Path.of(v))))).text("New directory under outputs to copy the material into and run in"),
           arg[String]("<command>...").unbounded().required().action((v, c) => c.copy(serve = c.serve.copy(command = c.serve.command :+ v)))))*))
 
+
   def main(args: Array[String]): Unit = sys.exit(execute(args.toVector))
 
   /** Return an exit code without terminating the JVM, so dispatch can be integration-tested. */
   def execute(args: Vector[String], options: ProcessingOptions = ProcessingOptions(), helpers: Path = Path.of("scripts"),
       out: PrintStream = System.out, err: PrintStream = System.err): Int =
     val normalized = if args.isEmpty then Vector("--help") else if args.head == "help" then args.tail :+ "--help" else args
-    if normalized.contains("--help") && (normalized.size == 1 || Set("inspect", "plan", "apply", "verify", "translate-ids", "fetch-reference", "profile-han", "evaluate", "sandbox-check", "sandbox-run", "serve", "measure-speed", "run-external")(normalized.head)) then
+    if normalized.contains("--help") && (normalized.size == 1 || Set("inspect", "plan", "apply", "verify", "translate-ids", "fetch-reference", "profile-han", "evaluate", "sandbox-check", "sandbox-run", "serve", "measure-speed", "run-external", "review")(normalized.head)) then
       out.println(OParser.usage(parser))
       return 0
     val (parsed, effects) = OParser.runParser(parser, normalized, Arguments())
@@ -188,7 +195,8 @@ object Main:
               HanProfile.write(characters, config.profileSource.isDefined, references,
                 inputs.mapObject(fields => config.profileSource.fold(fields)(source => fields.add("source", Json.fromString(source.toRealPath().toString)))),
                 config.runDirectory, config.profileSource.toVector :+ config.kanjiDirectory, runtime)
-            case "evaluate" => evaluate(config, runtime, helpers)
+            case "evaluate" => evaluate(config, runtime, helpers, err)
+            case "review" => me.nsmr.vocabsurgery.evaluation.Comparison.review(config.evaluationOutput, config.ratings.get, config.report.get, runtime)
             case "sandbox-check" => Sandbox.report(config.sandbox.sandboxChoice)
             case "serve" => serve(config.serve, runtime, err)
             case "measure-speed" =>
@@ -234,24 +242,56 @@ object Main:
         Json.obj("server" -> server.metadata, "exitCode" -> Json.fromInt(code))
     finally server.close()
 
-  private def evaluate(config: Arguments, options: ProcessingOptions, helpers: Path): Json =
-    Diagnostics.check(config.url.startsWith("http://") || config.url.startsWith("https://"), Path.of("omlx-url"), "URL", "expected HTTP(S) endpoint")
+  /** Verify the manifest, collect the reference results (tokenization, logits, versions) from the Python reference
+    * implementations, and run the comparison with the chosen runtime, each checkpoint served in turn.
+    */
+  private def evaluate(config: Arguments, options: ProcessingOptions, helpers: Path, err: PrintStream): Json =
+    import me.nsmr.vocabsurgery.evaluation.*
+    import me.nsmr.vocabsurgery.runtime.ServedModel
     CheckpointProcessor.verifyManifest(config.manifest, ExternalTools.reference(config.python, helpers), options)
     val manifest = JsonIO.read(config.manifest)
-    val source = Path.of(JsonFields.text(JsonFields.field(manifest, "source", config.manifest, "manifest"), config.manifest, "source"))
-    val model = Path.of(JsonFields.text(JsonFields.field(manifest, "modelOutput", config.manifest, "manifest"), config.manifest, "modelOutput"))
-    val directory = ProcessingIO.createDirectory(options.outputRoot, config.evaluationOutput, Vector(source, model))
-    val prepared = PlanStore.loadVerified(Path.of(JsonFields.text(JsonFields.field(manifest, "plan", config.manifest, "manifest"), config.manifest, "plan")))
+    def field(name: String) = Path.of(JsonFields.text(JsonFields.field(manifest, name, config.manifest, "manifest"), config.manifest, name))
+    val (source, model) = (field("source"), field("modelOutput"))
+    val prepared = PlanStore.loadVerified(field("plan"))
     val rule = prepared.domain.policy.characterRule.getOrElse(Diagnostics.invalid(config.manifest, "policy",
       s"contamination metrics need a policy that decides by characters; ${prepared.domain.policy.name} does not"))
-    val forbidden = (0 to 0x10ffff).iterator.filter(cp => cp < 0xd800 || cp > 0xdfff)
-      .flatMap(cp => rule.forbidden(me.nsmr.vocabsurgery.core.CodePoint(cp)))
-      .map(f => Json.arr(Json.fromInt(f.character.intValue), Json.fromValues(f.reasons.toVector.map(_.code).sorted.map(Json.fromString))))
-    ProcessingIO.write(directory.resolve("forbidden-codepoints.json"), Json.fromValues(forbidden.toVector))
-    FileIO.copyRange(config.suite, directory.resolve("suite.jsonl"), me.nsmr.vocabsurgery.core.ByteRange(me.nsmr.vocabsurgery.core.ByteOffset(0), me.nsmr.vocabsurgery.core.ByteCount(Files.size(config.suite))))
-    val extra = config.serverEnvironment.toVector.flatMap(path => Vector("--server-environment", path.toString))
-    ExternalTools.run(config.python, helpers.resolve("evaluate.py"), Vector("--manifest", config.manifest.toAbsolutePath.toString,
-      "--suite", directory.resolve("suite.jsonl").toString, "--omlx-url", config.url, "--baseline-model", config.baselineModel,
-      "--pruned-model", config.prunedModel, "--output", directory.toString, "--api-key-env", config.apiKeyEnvironment,
-      "--trials", config.trials.toString, "--warmups", config.warmups.toString) ++ extra, directory.resolve("helper.log"), config.timeout)
-    JsonIO.read(directory.resolve("metrics.json"))
+    val forbidden = (cp: Int) => if cp >= 0xd800 && cp <= 0xdfff then Vector.empty
+      else rule.forbidden(me.nsmr.vocabsurgery.core.CodePoint(cp)).toVector.flatMap(_.reasons.toVector.map(_.code)).sorted
+    val scratch = Files.createTempDirectory("vocab-evaluate-")
+    try
+      def reference(name: String, args: String*): Json =
+        val out = scratch.resolve(s"$name.json")
+        ExternalTools.run(config.python, helpers.resolve("tokenization.py"), args.toVector ++ Vector("--out", out.toString), scratch.resolve(s"$name.log"), 1800)
+        JsonIO.read(out)
+      val mapping = scratch.resolve("mapping.json")
+      ProcessingIO.write(mapping, prepared.domain.projection.compactToOriginalJson)
+      val tokenization = reference("tokenization", "suite", "--source", source.toString, "--model", model.toString, "--suite", config.suite.toString,
+        "--mapping", mapping.toString).asArray.getOrElse(Vector.empty)
+      val versions = reference("versions", "versions")
+      val logits = if !config.logits then Json.obj("passed" -> Json.Null, "state" -> Json.fromString("not-run"))
+        else
+          val out = scratch.resolve("logits")
+          try ExternalTools.run(config.python, helpers.resolve("logits.py"), Vector("compare", "--manifest", config.manifest.toAbsolutePath.toString,
+            "--output", out.toString), scratch.resolve("logits.log"), 3600)
+          catch case e: DataException if Files.isRegularFile(out.resolve("logits-summary.json")) => ()
+          JsonIO.read(out.resolve("logits-summary.json"))
+      var located = 0
+      val locate = (positions: Vector[(String, String, Int)]) =>
+        located += 1
+        val input = scratch.resolve(s"positions-$located.json")
+        ProcessingIO.write(input, Json.fromValues(positions.map((id, text, position) =>
+          Json.obj("id" -> Json.fromString(id), "text" -> Json.fromString(text), "position" -> Json.fromInt(position)))))
+        reference(s"located-$located", "locate", "--tokenizer", source.toString, "--positions", input.toString).asArray.getOrElse(Vector.empty)
+          .map(row => row.hcursor.get[String]("id").getOrElse("") -> row.hcursor.get[Int]("candidate").toOption).toMap
+      val kept = prepared.domain.projection.compactToOriginal.map(_.intValue).toSet
+      val references = ComparisonReferences(tokenization, logits, versions, locate, kept,
+        prepared.domain.savedPayloadBytes.longValue)
+      val extra = config.extra.fold(io.circe.JsonObject.empty)(text => io.circe.jawn.parse(text).toOption.flatMap(_.asObject)
+        .getOrElse(throw IllegalArgumentException("--extra must be a JSON object")))
+      val runtime = config.serve.copy(promptCache = false).inferenceRuntime
+      Comparison.run(runtime, config.suite, ServedModel("baseline", source), ServedModel("pruned", model), references, forbidden,
+        Toolchains.detect(config.python, options.outputRoot), Sandbox.platform(config.sandbox.sandboxChoice),
+        ComparisonSettings(config.trials, config.warmups, extra = extra, port = config.serve.port,
+          readyTimeout = scala.concurrent.duration.FiniteDuration(config.serve.readyTimeoutSeconds.toLong, "seconds")),
+        config.evaluationOutput, options, message => err.println(message))
+    finally Using.resource(Files.walk(scratch))(_.iterator().asScala.toVector.sortBy(_.getNameCount).reverse.foreach(Files.delete))

@@ -28,7 +28,7 @@ object RuntimeFixtures:
       "        body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))\n" +
       "        drafts = body.get('draft', True)\n" +
       "        events = [{'choices': [{'delta': {'content': 'ok'}}]}, {'choices': [{'delta': {}, 'finish_reason': 'stop'}]},\n" +
-      "                  {'choices': [], 'usage': {'prompt_tokens': 3, 'completion_tokens': 2}}]\n" +
+      "                  {'choices': [], 'usage': {'prompt_tokens': 3, 'completion_tokens': 2, 'prompt_tokens_details': {'cached_tokens': 0}}}]\n" +
       "        data = ''.join('data: ' + json.dumps(e) + '\\n\\n' for e in events) + 'data: [DONE]\\n\\n'\n" +
       "        self.send_response(200); self.send_header('Content-Type', 'text/event-stream'); self.end_headers(); self.wfile.write(data.encode())\n" +
       "        stats = 'rounds=1 accepted=1/1' if drafts else 'rounds=2 accepted=0/0'\n" +

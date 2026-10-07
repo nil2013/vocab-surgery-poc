@@ -59,7 +59,7 @@ final case class OMlx(python: Path) extends InferenceRuntime with ModelResidency
   * of upstream token ids can replace its built-in one.
   */
 final case class TensorFoldClone(directory: Path, context: Int = 65536, pleOnSsd: Boolean = true, draftVocabulary: Option[Path] = None,
-    cudaHome: Path = Path.of("/usr/local/cuda")) extends InferenceRuntime with DraftSwitch with DraftStatistics:
+    cudaHome: Path = Path.of("/usr/local/cuda"), promptCache: Boolean = true) extends InferenceRuntime with DraftSwitch with DraftStatistics:
   val name = "tensorfold"
   /** The clone as an absolute path: the server runs in its own directory. */
   private val home = directory.toAbsolutePath.normalize
@@ -68,7 +68,8 @@ final case class TensorFoldClone(directory: Path, context: Int = 65536, pleOnSsd
   private[runtime] def command(model: ServedModel, port: Int): Vector[String] =
     Vector(home.resolve(".venv/bin/tensorfold").toString, "serve", model.checkpoint.toAbsolutePath.normalize.toString, "--host", "127.0.0.1", "--port", port.toString,
       "--name", model.name) ++ (if pleOnSsd then Vector("--ple-on-ssd") else Vector.empty) ++ Vector("--context", context.toString) ++
-      draftVocabulary.toVector.flatMap(path => Vector("--draft-vocab", path.toAbsolutePath.normalize.toString))
+      draftVocabulary.toVector.flatMap(path => Vector("--draft-vocab", path.toAbsolutePath.normalize.toString)) ++
+      (if promptCache then Vector.empty else Vector("--prompt-cache-gib", "0"))
 
   private[runtime] def environment: Map[String, String] =
     Map("TORCH_EXTENSIONS_DIR" -> home.resolve(".torch-extensions").toString,
@@ -82,6 +83,7 @@ final case class TensorFoldClone(directory: Path, context: Int = 65536, pleOnSsd
     ServerProcess.start(name, request, options, request.models.map(_.checkpoint) :+ directory, _ =>
       (command(request.models.head, request.port), environment, Json.obj("clone" -> Json.fromString(directory.toAbsolutePath.normalize.toString),
         "cloneRevision" -> Json.fromString(revision), "context" -> Json.fromInt(context), "pleOnSsd" -> Json.fromBoolean(pleOnSsd),
+        "promptCache" -> Json.fromBoolean(promptCache),
         "draftVocabulary" -> draftVocabulary.fold(Json.Null)(path => Json.obj("path" -> Json.fromString(path.toAbsolutePath.normalize.toString),
           "sha256" -> Json.fromString(FileIO.sha256(path)))))))
 

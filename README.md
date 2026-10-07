@@ -23,7 +23,7 @@ sbt --batch ';set Test / javaOptions += "-DvocabSurgery.snapshot=models/models--
 
 この integration test は指定 snapshot の設定・tokenizer・index と全 shard headers を読み取り、系列によらない不変条件（未登録行数、基礎 token の保護、added tokens の残存、削減 byte 数と行数の対応、対象 tensor だけの縮小、書き換え後の ID 範囲）で更新計画を検証する。元ファイルを書き換えず、payload の hash や推論品質は検証しない。
 
-`tokenizers` をインストール済みの Python を test JVM の `vocabSurgery.tokenizersPython` property に追加すると、更新済み tokenizer JSON の参照実装でのロード、10,086 字の NFC 一致、日本語・coding・protocol 入力の round trip も検証する。Python process はネットワークにアクセスせず、一時ファイルは終了時に削除する。参照検証用の Python は repository root の `.venv` に用意できる。`numpy` は `scripts/flash-next/draft_vocab.py` が使う。
+`tokenizers` をインストール済みの Python を test JVM の `vocabSurgery.tokenizersPython` property に追加すると、更新済み tokenizer JSON の参照実装でのロード、10,086 字の NFC 一致、日本語・coding・protocol 入力の round trip も検証する。Python process はネットワークにアクセスせず、一時ファイルは終了時に削除する。参照検証用の Python は repository root の `.venv` に用意できる。`numpy` は `scripts/logits.py`（評価の `--logits`）が使う。
 
 ```sh
 uv venv .venv
@@ -110,9 +110,9 @@ scripts/vocab-surgery translate-ids --manifest "$RUN/manifest.json" --ids draft_
 
 ## 評価する
 
-[評価の手順](docs/EVALUATION.md) を参照して、固定 suite、明示した oMLX 接続先とモデル名、独立した出力 directory を用意する。日本語品質は目視評価を待つ状態で保存される。数値 gate の超過は終了コード 4 となり、許容差は自動で変更しない。
+`scripts/vocab-surgery evaluate` が、元モデルと加工モデルを推論環境（`--runtime omlx|tensorfold`）で順に serve し、固定 suite で比較する。[評価の手順](docs/EVALUATION.md) を参照して、推論環境、参照実装用の Python、独立した出力 directory を指定する。日本語品質は目視評価を待つ状態で保存される。数値 gate の超過は終了コード 4 となり、許容差は自動で変更しない。
 
-評価 helper の検証には次を使う。Scala／TypeScript の実行テストは `stageCli` と文書に記載した明示的な tool setup が必要で、利用できない場合はスキップと表示される。
+参照実装の Python helper（`check_tokenizer.py`、`logits.py`、`tokenization.py`）と launcher の検証には次を使う。tokenizers のない Python では一部がスキップと表示される。
 
 ```sh
 python3 -m unittest discover -s scripts/tests -v

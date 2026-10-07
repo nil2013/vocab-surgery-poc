@@ -1,6 +1,6 @@
 # Flash-Next 専用の評価道具
 
-Qwen3.8-Flash-Next の checkpoint（元モデルと加工モデル）を serve して評価するための道具である。Flash-Next 以外のモデルには使わない。serve と速度・受理率の測定は production の CLI（`vocab-surgery serve`、`measure-speed`、`run-external` の `--runtime tensorfold`）にあり、ここにはその近道と、clone の環境構築だけを置く。
+Qwen3.8-Flash-Next の checkpoint（元モデルと加工モデル）を serve して評価するための道具である。Flash-Next 以外のモデルには使わない。serve と速度・受理率の測定は production の CLI（`vocab-surgery serve`、`measure-speed`、`run-external`、`evaluate` の `--runtime tensorfold`）にあり、ここにはその近道と、clone の環境構築だけを置く。
 
 Flash-Next は oMLX では serve できない。そこで、upstream の TensorFold を固定した commit で取得し、このディレクトリの patch を当てた clone を検証用に使う。clone は本番の serve 環境とは別物で、production 用途には使わない。
 
@@ -15,12 +15,12 @@ Flash-Next は oMLX では serve できない。そこで、upstream の TensorF
 | ファイル | 役割 |
 | --- | --- |
 | `setup-tensorfold.sh` | upstream（`https://github.com/ashhart/TensorFold.git`）の `cb2ebf05` を `outputs/tensorfold`（`TF_CLONE` で変更）に取得し、ブランチ `vocab-surgery-ple-token-ids` に patch を `git am` で当て、clone 内に `.venv`（Python 3.13、torch 2.14.1+cu130、editable install）を作る。既存の clone は上書きしない |
-| `tensorfold-patches/` | clone に当てる改造。`ple-token-ids.json`（PLE 対応表）を読み、PLE の hash に元の語彙数と元の ID を使う。draft 語彙のリスト（TF の `draft_vocab.txt`、または `--draft-vocab` で渡すファイル）を加工後の ID に変換する |
+| `tensorfold-patches/` | clone に当てる改造。`ple-token-ids.json`（PLE 対応表）を読み、PLE の hash に元の語彙数と元の ID を使う。draft 語彙のリスト（TF の `draft_vocab.txt`、または `--draft-vocab` で渡すファイル）を加工後の ID に変換する。`--prompt-cache-gib 0` で prompt の prefix を再利用しない（比較評価で毎回 prompt 全体を prefill するため。`evaluate` が使う） |
 | `serve.sh` | `vocab-surgery serve --runtime tensorfold --model fn=<checkpoint>` の近道。新しい server ディレクトリ（`server.log`、`server.json`）を作って serve し、`--` の後のコマンドを `VOCAB_ENDPOINT`、`VOCAB_MODELS` 付きで実行してから止める。`--draft-vocab FILE`、`--port N` などの serve の option をそのまま渡せる |
 | `draft_vocab.py` | JSON の profile と中立のコーパス（1 行に `{"text": …}`）から、MTP の draft 語彙のリストを作り直す。行数は基準のリスト（TF の `draft_vocab.txt`）と同じに保ち、コーパスで頻出する token を頻度順に入れ、コーパスで一度も生成されない行を ID の大きい方から落とす。added tokens（`<|im_end|>` など）は落とさない。repository の `.venv`（tokenizers、numpy）で動かす。コーパスは評価素材の側が書き出す |
 | `draft-vocab/` | `draft_vocab.py` の profile（規則だけを持つ）。`corpus-frequent.json` は、コーパスで 2 回以上生成された token を、言語を問わず頻度順に入れる |
 
-`setup-tensorfold.sh` で作った clone は、patch を当てた後の commit hash まで手元で作った clone（`912415a`、`8afb41b`、`0b77801`）と一致する（実機確認）。
+`setup-tensorfold.sh` で作った clone は、patch を当てた後の commit hash まで手元で作った clone（`912415a`、`8afb41b`、`0b77801`、`3f3f934`）と一致する（実機確認）。
 
 ## 使い方
 

@@ -58,14 +58,15 @@ class RuntimeSuite extends munit.FunSuite:
     }
   }
 
-  test("runtime commands match the reference launchers") {
-    // scripts/serve-evaluation.py and scripts/flash-next/serve.sh
+  test("runtime commands keep the launch options the comparisons were run with") {
+    // The options scripts/serve-evaluation.py and scripts/flash-next/serve.sh used before this runtime replaced them
     assertEquals(OMlx(Path.of("/py")).command(Path.of("/s"), 8302), Vector("/py", "-m", "omlx.cli", "serve", "--model-dir", "/s/models",
       "--base-path", "/s/data", "--host", "127.0.0.1", "--port", "8302", "--no-cache", "--no-hf-cache", "--max-concurrent-requests", "1"))
     assertEquals(TensorFoldClone(Path.of("/c")).command(ServedModel("fn", Path.of("/m")), 18080), Vector("/c/.venv/bin/tensorfold", "serve", "/m",
       "--host", "127.0.0.1", "--port", "18080", "--name", "fn", "--ple-on-ssd", "--context", "65536"))
     assertEquals(TensorFoldClone(Path.of("/c"), draftVocabulary = Some(Path.of("/d.txt"))).command(ServedModel("fn", Path.of("/m")), 1).takeRight(2),
       Vector("--draft-vocab", "/d.txt"))
+    assertEquals(TensorFoldClone(Path.of("/c"), promptCache = false).command(ServedModel("fn", Path.of("/m")), 1).takeRight(2), Vector("--prompt-cache-gib", "0"))
     assertEquals(TensorFoldClone(Path.of("/c"), cudaHome = Path.of("/cuda")).environment("TORCH_EXTENSIONS_DIR"), "/c/.torch-extensions")
     assert(TensorFoldClone(Path.of("/c"), cudaHome = Path.of("/cuda")).environment("PATH").startsWith("/cuda/bin:"))
     intercept[IllegalArgumentException](ServedModel("a b", Path.of("/m")))

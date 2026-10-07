@@ -10,7 +10,7 @@ Purpose: vocabulary and embedding / LM-head pruning of MLX safetensors checkpoin
 - Use [docs/MODEL_FAMILIES.md](docs/MODEL_FAMILIES.md) when adding or changing a model family, tokenizer scheme, row encoding, or filesystem transfer. Do not add model-name branches to shared operations.
 - Keep tools that serve or evaluate one specific model under `scripts/<model>/` with its own README (Flash-Next: [scripts/flash-next](scripts/flash-next/README.md)); the top level of `scripts/` holds model-independent helpers only.
 - Use [docs/PROCESSING.md](docs/PROCESSING.md) for saved plans, input inventories, output boundaries, staging, publication, or full checkpoint verification.
-- Use [docs/EVALUATION.md](docs/EVALUATION.md) for oMLX helpers, fixed suites, metrics, code execution, or evaluation conclusions. Keep a failed logits gate and pending human ratings visible; do not infer TASK completion from a successful command.
+- Use [docs/EVALUATION.md](docs/EVALUATION.md) for the before / after comparison, fixed suites, metrics, code execution, inference runtimes, or evaluation conclusions. Keep a failed logits gate and pending human ratings visible; do not infer TASK completion from a successful command.
 - Use [docs/EVALUATION_ARCHITECTURE.md](docs/EVALUATION_ARCHITECTURE.md) for the boundaries between this project, external evaluation materials, inference runtimes and Python reference implementations, and for moving evaluation helpers into Scala.
 - Use [docs/PRUNING_JA_EN_CODING_V2.md](docs/PRUNING_JA_EN_CODING_V2.md) when changing `policies/ja-en-coding-v2.json` or its Math / manual-Han decisions.
 - Use [outputs/SPEC.md](outputs/SPEC.md) when changing surgery requirements or acceptance criteria. Distinguish agreed requirements from initial proposed thresholds.
@@ -56,13 +56,14 @@ Run from the repository root with JDK 17+. Compiler warnings are errors. No sepa
 | CLI dispatch, argument / helper failures | `cli.CliSuite` |
 | Confined execution of generated code | `sandbox.SandboxSuite` (its live tests need a sandbox on the host; report skips) |
 | Inference runtimes, serving and their logs | `runtime.RuntimeSuite`, `cli.CliSuite` |
-| Chat client, own suite, code checks, speed, external runs | `evaluation.EvaluationSuite` (code checks need a sandbox and `stageCli`; report skips), `cli.CliSuite` |
+| Chat client, speed, external runs | `evaluation.EvaluationSuite`, `cli.CliSuite` |
+| Own fixed suite, code checks, comparison and review | `evaluation.OwnSuiteSuite` (code checks need a sandbox, `stageCli` and fetched Node / TypeScript; report skips), `cli.CliSuite` |
 
 - For build / dependency or cross-package changes, use `sbt --batch testFull`. In sbt 2, `test` is incremental; `clean;test` does not replace `testFull`.
 - When real-checkpoint coverage is needed, run `model.LocalSnapshotSuite` using the README's test-JVM property setup. It checks family-independent invariants on any supported snapshot. Without `vocabSurgery.snapshot`, it skips: do not count this as coverage or auto-download weights. Reference tokenizer / NFC comparison additionally requires the explicit `vocabSurgery.tokenizersPython` property; do not count an unset property as that coverage.
 - Kanji tests need the submodule. Tests use a 512 MiB forked heap and sparse temporary files; retain these checks for memory-sensitive I/O.
 - After CLI or runtime dependency changes, run `sbt --batch stageCli` before using `scripts/vocab-surgery`; it launches staged jars, not current source.
-- For Python evaluation helper changes, use `python3 -m unittest discover -s scripts/tests -v`. Scala / TypeScript execution coverage requires `stageCli` and the explicit tool setup in EVALUATION.md; report skips. Shell launcher changes need `sh -n scripts/vocab-surgery scripts/run-surgery.sh`.
+- For Python reference helper changes (`check_tokenizer.py`, `logits.py`, `tokenization.py`), use `python3 -m unittest discover -s scripts/tests -v`; tests needing tokenizers skip without it, so report skips. Shell launcher changes need `sh -n scripts/vocab-surgery scripts/run-surgery.sh`.
 - Run `sbt --batch doc` for Scaladoc changes. For prose-only changes, check links and `git diff --check`; Scala tests are unnecessary.
 
 Complete the scoped checks, report skipped integration coverage, and commit implementation changes in coherent, verified units as required by the specification.
