@@ -1,0 +1,201 @@
+From 912415a022f5885c05e1ec6d433b8afb5db21719 Mon Sep 17 00:00:00 2001
+From: Nil <lue.gsk.2012@gmail.com>
+Date: Wed, 7 Oct 2026 01:38:41 +0900
+Subject: [PATCH 1/2] feat(qwen4_exp cuda): load vocabulary-pruned Flash Next
+ checkpoints
+
+A checkpoint whose vocabulary rows were pruned and renumbered carries
+ple-token-ids.json: each row's token id at training time and the vocabulary
+size PLE's n-gram hashing was derived from. Config reads it, NGram hashes
+canonical ids (histories and the PLE EOS hold them), and the built-in draft
+list, written in upstream ids, is refused for such checkpoints.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011XiGQHTjzpMVa5sTqiQmg5
+---
+ .../families/qwen4_exp/cuda/forward.py        |  2 +-
+ .../families/qwen4_exp/cuda/ngram.py          | 10 +++-
+ .../families/qwen4_exp/cuda/weight_types.py   | 26 ++++++++--
+ .../families/qwen4_exp/cuda/weights.py        |  3 ++
+ tests/test_flashnext_ple_token_ids.py         | 47 +++++++++++++++++++
+ 5 files changed, 83 insertions(+), 5 deletions(-)
+ create mode 100644 tests/test_flashnext_ple_token_ids.py
+
+diff --git a/src/tensorfold/families/qwen4_exp/cuda/forward.py b/src/tensorfold/families/qwen4_exp/cuda/forward.py
+index c5fa44d..e71ceda 100644
+--- a/src/tensorfold/families/qwen4_exp/cuda/forward.py
++++ b/src/tensorfold/families/qwen4_exp/cuda/forward.py
+@@ -467,7 +467,7 @@ def stage(w: Weights, b: Buffers, windows: Sequence[tuple[State, Sequence[int]]]
+         if layer.ple is not None:
+             p = layer.ple
+             for (st, tokens), (_, a0, _) in zip(windows, segs):
+-                toks = np.asarray(tokens, dtype=np.int64)
++                toks = p.ngram.canonical(tokens)
+                 ids = p.ngram.ids(st.ple_history, toks)
+                 st.ple_last = (st.ple_history, toks)
+                 lookups.append((p, ids, a0 * (ids.size // len(toks))))
+diff --git a/src/tensorfold/families/qwen4_exp/cuda/ngram.py b/src/tensorfold/families/qwen4_exp/cuda/ngram.py
+index 5d84ee1..a815c35 100644
+--- a/src/tensorfold/families/qwen4_exp/cuda/ngram.py
++++ b/src/tensorfold/families/qwen4_exp/cuda/ngram.py
+@@ -49,8 +49,10 @@ def layer_multipliers(vocab: int, ngram: int, ple_index: int, seed: int) -> np.n
+ 
+ class NGram:
+     def __init__(self, *, vocab: int, ngram_size: int, heads_per_ngram: int, vocab_base: int, divisor: int,
+-                 shards: int, seed: int, eos: int, embed_dim: int, ple_index: int = 0) -> None:
++                 shards: int, seed: int, eos: int, embed_dim: int, ple_index: int = 0,
++                 token_ids: np.ndarray | None = None) -> None:
+         self.n = ngram_size
++        self.token_ids = token_ids      # a pruned checkpoint's rows -> the ids the tables were trained on (None: same)
+         self.context = ngram_size - 1
+         self.per_ngram = heads_per_ngram
+         self.heads = self.context * heads_per_ngram
+@@ -75,6 +77,12 @@ class NGram:
+             if not np.array_equal(shipped, derived):
+                 raise ValueError(f"{name}: checkpoint {shipped} != derived {derived}")
+ 
++    def canonical(self, tokens: np.ndarray) -> np.ndarray:
++        """The ids the tables were trained on for checkpoint ``tokens``; histories and ``eos`` hold these."""
++
++        tokens = np.asarray(tokens, dtype=np.int64)
++        return tokens if self.token_ids is None else self.token_ids[tokens]
++
+     def ids(self, history: np.ndarray, tokens: np.ndarray) -> np.ndarray:
+         """Row ids [L, heads] for ``tokens`` [L] after ``history`` [n-1] (EOS resets the n-grams)."""
+ 
+diff --git a/src/tensorfold/families/qwen4_exp/cuda/weight_types.py b/src/tensorfold/families/qwen4_exp/cuda/weight_types.py
+index 6043ec8..c242c5e 100644
+--- a/src/tensorfold/families/qwen4_exp/cuda/weight_types.py
++++ b/src/tensorfold/families/qwen4_exp/cuda/weight_types.py
+@@ -18,6 +18,19 @@ from .ngram import NGram
+ from .qmm import Q4
+ 
+ 
++def ple_token_ids(model_dir: Path, vocab: int) -> tuple[int, np.ndarray | None]:
++    """A vocabulary-pruned checkpoint's ple-token-ids.json: PLE's training-time vocabulary size and each row's token id."""
++
++    path = model_dir / "ple-token-ids.json"
++    if not path.exists():
++        return 0, None
++    table = json.loads(path.read_text())
++    ids, size = np.asarray(table["originalTokenIds"], dtype=np.int64), int(table["originalVocabSize"])
++    if ids.shape != (vocab,) or (ids.size and (ids[0] < 0 or ids[-1] >= size or np.any(np.diff(ids) <= 0))):
++        raise ValueError(f"{path}: expected {vocab} increasing token ids below {size}")
++    return size, ids
++
++
+ def stop_ids(configured: Any, generation: Path) -> tuple[int, ...]:
+     """config.json's end-of-reply ids, then generation_config.json's it lacks (EXL3 packs keep <|im_end|> there)."""
+ 
+@@ -76,6 +89,8 @@ class Config:
+     quant: str = "mlx"                 # "mlx" (affine 4-bit everywhere) or "modelopt" (NVFP4 routed experts)
+     mrope_section: tuple[int, int, int] = (11, 11, 10)   # interleaved t/h/w rotary pairs
+     nvfp4_group: int = 16              # the NVFP4 block size (the checkpoint's config_groups weights.group_size)
++    ple_vocab: int = 0                 # the vocabulary size PLE's n-gram hashing was trained with (0: ``vocab``)
++    ple_token_ids: np.ndarray | None = None   # a pruned checkpoint's rows -> the token ids PLE was trained with
+ 
+     @classmethod
+     def read(cls, model_dir: str | Path) -> "Config":
+@@ -90,6 +105,10 @@ class Config:
+         method = str(quant.get("quant_method") or "mlx").lower()
+         groups = quant.get("config_groups") or {}
+         group = int(((groups.get("group_0") or {}).get("weights") or {}).get("group_size", 16))
++        ple_vocab, ple_ids = ple_token_ids(Path(model_dir), int(t["vocab_size"]))
++        ple_eos = int(teos[0] if isinstance(teos, list) else teos) if teos is not None else 0
++        if ple_ids is not None:
++            ple_eos = int(ple_ids[ple_eos])
+         return cls(
+             hidden=int(t["hidden_size"]), layers=int(t["num_hidden_layers"]),
+             layer_types=["linear" if k == "linear_attention" else "attention" for k in t["layer_types"]],
+@@ -111,7 +130,7 @@ class Config:
+             ngram_base=int(t.get("ngram_vocab_size_base", 20_000_000)),
+             ngram_divisor=int(t.get("make_ngram_vocab_size_divisible_by", 128)),
+             ngram_shards=int(t.get("split_ngram_parts", 128)), seed=int(t.get("seed", 1234)),
+-            ple_eos=int(teos[0] if isinstance(teos, list) else teos) if teos is not None else 0,
++            ple_eos=ple_eos, ple_vocab=ple_vocab, ple_token_ids=ple_ids,
+             eos=eos, group_size=int(quant.get("group_size", 32)), bits=int(quant.get("bits", 4)),
+             quant=method, nvfp4_group=group,
+             mrope_section=tuple(int(x) for x in rope.get("mrope_section", (11, 11, 10))),
+@@ -126,9 +145,10 @@ class Config:
+         return self.index_budget // self.index_ratio
+ 
+     def ngram(self, ple_index: int = 0) -> NGram:
+-        return NGram(vocab=self.vocab, ngram_size=self.ngram_size, heads_per_ngram=self.heads_per_ngram,
++        return NGram(vocab=self.ple_vocab or self.vocab, ngram_size=self.ngram_size, heads_per_ngram=self.heads_per_ngram,
+                      vocab_base=self.ngram_base, divisor=self.ngram_divisor, shards=self.ngram_shards,
+-                     seed=self.seed, eos=self.ple_eos, embed_dim=self.ple_dim, ple_index=ple_index)
++                     seed=self.seed, eos=self.ple_eos, embed_dim=self.ple_dim, ple_index=ple_index,
++                     token_ids=self.ple_token_ids)
+ 
+ 
+ @dataclass
+diff --git a/src/tensorfold/families/qwen4_exp/cuda/weights.py b/src/tensorfold/families/qwen4_exp/cuda/weights.py
+index 5159a73..5a28221 100644
+--- a/src/tensorfold/families/qwen4_exp/cuda/weights.py
++++ b/src/tensorfold/families/qwen4_exp/cuda/weights.py
+@@ -417,6 +417,9 @@ def load(model_dir: str | Path, device: str = "cuda", *, mtp: bool = True, tp: t
+             del head_raw
+         # NVFP4: the draft head is the bf16 lm_head's draft rows requantized 4-bit at load (drafts only)
+         draft_head, draft_ids = None, None
++        if draft_vocab == "default" and full.ple_token_ids is not None:
++            raise ValueError("the built-in draft list holds upstream token ids; a vocabulary-pruned checkpoint needs its "
++                             "own list (vocab-surgery translate-ids) or --draft-vocab N")
+         ids = draft_token_ids(draft_vocab)
+         if ids is not None:
+             ids = np.array_split(ids[ids < full.vocab], world)[rank]
+diff --git a/tests/test_flashnext_ple_token_ids.py b/tests/test_flashnext_ple_token_ids.py
+new file mode 100644
+index 0000000..7e0773c
+--- /dev/null
++++ b/tests/test_flashnext_ple_token_ids.py
+@@ -0,0 +1,47 @@
++"""A vocabulary-pruned Flash Next checkpoint hashes its n-grams with the token ids PLE was trained on."""
++
++from __future__ import annotations
++
++import json
++
++import numpy as np
++import pytest
++
++from tensorfold.families.qwen4_exp.cuda.weight_types import Config, ple_token_ids
++
++
++def _write(tmp_path, vocab, eos, table=None):
++    text = {"hidden_size": 8, "num_hidden_layers": 1, "layer_types": ["full_attention"], "vocab_size": vocab,
++            "rms_norm_eps": 1e-6, "num_attention_heads": 2, "num_key_value_heads": 1, "head_dim": 4,
++            "linear_num_key_heads": 1, "linear_num_value_heads": 1, "linear_key_head_dim": 4, "linear_value_head_dim": 4,
++            "linear_conv_kernel_dim": 4, "num_experts": 2, "num_experts_per_tok": 1, "moe_intermediate_size": 4,
++            "shared_expert_intermediate_size": 4, "eos_token_id": eos, "ple_layer_ids": [1], "ple_embed_dim": 8}
++    (tmp_path / "config.json").write_text(json.dumps({"text_config": text, "eos_token_id": [eos]}))
++    if table is not None:
++        (tmp_path / "ple-token-ids.json").write_text(json.dumps(table))
++
++
++def test_pruned_rows_hash_like_their_upstream_ids(tmp_path):
++    upstream = tmp_path / "upstream"
++    pruned = tmp_path / "pruned"
++    upstream.mkdir()
++    pruned.mkdir()
++    kept = [0, 3, 4, 7, 9]
++    _write(upstream, 12, 9)
++    _write(pruned, len(kept), 4, {"originalVocabSize": 12, "originalTokenIds": kept})
++    a, b = Config.read(upstream), Config.read(pruned)
++    assert (b.vocab, b.ple_vocab, b.ple_eos, b.eos) == (5, 12, 9, (4,))
++    assert np.array_equal(a.ngram().multipliers, b.ngram().multipliers)
++    compact = np.array([1, 2, 4, 3, 0])
++    up, down = a.ngram(), b.ngram()
++    assert np.array_equal(down.canonical(compact), np.array(kept)[compact])
++    assert np.array_equal(down.ids(down.initial_history(), down.canonical(compact)),
++                          up.ids(up.initial_history(), np.array(kept)[compact]))
++    assert np.array_equal(up.canonical(compact), compact)
++
++
++def test_table_must_match_the_rows(tmp_path):
++    (tmp_path / "ple-token-ids.json").write_text(json.dumps({"originalVocabSize": 4, "originalTokenIds": [0, 2, 1]}))
++    with pytest.raises(ValueError):
++        ple_token_ids(tmp_path, 3)
++    assert ple_token_ids(tmp_path / "absent", 3) == (0, None)
+-- 
+2.43.0
+

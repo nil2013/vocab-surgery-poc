@@ -10,7 +10,7 @@
 - MTP の受理率は変わらなかった。temperature 0 の速度測定では、受理数まで完全に一致した。
 - 日本語の一部を簡体字・ハングルに置き換えた依頼に対して、元モデルは返答全体を韓国語・中国語に切り替えることがあった。pruned-v2 は日本語で答え続けたが、ハングルの部分を読めず推測で補った。推測を外すと別の内容を返し、意味の説明を求められると作り話をした。
 
-数値は、下記の run directory に保存した応答と server log から集計した（実機確認）。v1 レポートからの引用は（文書記載）と書く。応答の評価は筆者が読んで判定したもので、人による正式な採点ではない。生成 code は実行していない。実行方法は [EVALUATION.md](EVALUATION.md#実験用-tensorfold-clone-での評価flash-next)、加工の記録は [MODEL_FAMILIES.md](MODEL_FAMILIES.md#flash-next-の適用記録2026-10-07dgx-sparkext4) を参照する。
+数値は、下記の run directory に保存した応答と server log から集計した（実機確認）。v1 レポートからの引用は（文書記載）と書く。応答の評価は筆者が読んで判定したもので、人による正式な採点ではない。生成 code は実行していない。実行方法は [scripts/flash-next](../scripts/flash-next/README.md)、加工の記録は [MODEL_FAMILIES.md](MODEL_FAMILIES.md#flash-next-の適用記録2026-10-07dgx-sparkext4) を参照する。
 
 ## 対象と条件
 
@@ -19,12 +19,12 @@
 | 元モデル | `Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP`、snapshot `2b170fa6309d5d1ee380b35636075fac7945f286` |
 | 加工モデル | `outputs/models/flash-next-ja-en-coding-v2`（tool `a4dfe26`、policy `ja-en-coding-v2`） |
 | 語彙行数 | 248,320 → 181,103 |
-| Serve | TensorFold `cb2ebf05` の clone、ブランチ `vocab-surgery-ple-token-ids` の `8afb41b`。`--ple-on-ssd --context 65536`、loopback、1 本ずつ送信 |
+| Serve | TensorFold `cb2ebf05` の clone、ブランチ `vocab-surgery-ple-token-ids` の `8afb41b`（`scripts/flash-next/tensorfold-patches` を当てたもの）。`--ple-on-ssd --context 65536`、loopback、1 本ずつ送信 |
 | MTP の draft 語彙 | 同梱リスト 79,591 件。pruned-v2 では PLE 対応表で変換した 78,837 件（754 件は削除済み） |
 | Hardware | NVIDIA GB10（DGX）、Linux 7.0.0-1019-nvidia、torch 2.14.1+cu130 |
 | データ | `test-data` revision `ce193e0679a8fd143ca9237a45d8b3ff2df642f6`、合成 26 ケース（38 サンプル＋tool の追加の応答 1） |
 | 生成設定 | `enable_thinking: false`。合成テストは元データの temperature・seed を保持 |
-| 測定コード | `8261fbd`（`tf-evaluate.sh`、`tf_bench.py`、`tf_acceptance.py`、`probe_replies.py`） |
+| 測定コード | `8261fbd` の内容（その後 `scripts/flash-next/` の `evaluate.sh`、`bench.py`、`acceptance.py` と、汎用の `scripts/probe_replies.py` に配置を変えた） |
 | 保存先 | `outputs/runs/fn-serve-eval/`（git 管理外） |
 
 元モデルのすべての測定を終えて server を止めてから、pruned-v2 を起動した。code ケース（2 件）は、この host に sandbox がないため実行せず、PASS を `null` とした。
@@ -32,9 +32,10 @@
 測定コードの扱いについて：
 
 - 本文の測定は、測定コードを `scripts/` に移す前の同じ内容の script で行った。
-- 移した後に、`tf_acceptance.py` で保存済みの log を集計し直し、同じ数値になることを確かめた。test-data の複製と patch の結果も、測定時の複製と一致することを確かめた。
+- 移した後に、`acceptance.py` で保存済みの log を集計し直し、同じ数値になることを確かめた。test-data の複製と patch の結果も、測定時の複製と一致することを確かめた。
+- `setup-tensorfold.sh` で clone を作り直すと、測定に使った clone と commit hash まで一致した。その clone と移した後の `serve.sh`・`probe_replies.py` で、1 prompt の起動・応答・集計を確かめた。
 - 移した後の script で、測定の全体を通して実行し直してはいない。
-- 移す前の `tf_bench.py` は warm-up の行を保存していなかった。集計し直すときは、temperature 0 で出力が決定的なことを使い、測定 1 回目と同じ token 数で warm-up の行を補った。
+- 移す前の `bench.py` は warm-up の行を保存していなかった。集計し直すときは、temperature 0 で出力が決定的なことを使い、測定 1 回目と同じ token 数で warm-up の行を補った。
 
 ## 1. 合成テスト
 
@@ -74,7 +75,7 @@
 
 ## 3. MTP の受理率
 
-server は request ごとに draft の受理数を log に残す（`accepted=受理数/提案数`）。`tf_acceptance.py` でこれを各応答に割り当てた。
+server は request ごとに draft の受理数を log に残す（`accepted=受理数/提案数`）。`scripts/flash-next/acceptance.py` でこれを各応答に割り当てた。
 
 | 対象 | 元モデル | pruned-v2 |
 | --- | ---: | ---: |
@@ -167,18 +168,19 @@ server は request ごとに draft の受理数を log に残す（`accepted=受
 
 ## 再現
 
-[EVALUATION.md](EVALUATION.md#実験用-tensorfold-clone-での評価flash-next) の手順で実行できる。
+[scripts/flash-next](../scripts/flash-next/README.md) の前提（CUDA 13 の NVIDIA GPU、約 84 GiB の GPU メモリ）を満たす環境で実行できる。
 
 ```sh
+scripts/flash-next/setup-tensorfold.sh
 RUN=outputs/runs/<新しい run>
 SRC=models/models--Vontra--Qwen3.8-Flash-Next-MLX-4bit-MTP/snapshots/2b170fa6309d5d1ee380b35636075fac7945f286
-scripts/tf-evaluate.sh "$RUN" original "$SRC"
-scripts/tf-evaluate.sh "$RUN" pruned-v2 outputs/models/flash-next-ja-en-coding-v2
+scripts/flash-next/evaluate.sh "$RUN" original "$SRC"
+scripts/flash-next/evaluate.sh "$RUN" pruned-v2 outputs/models/flash-next-ja-en-coding-v2
 for label in original pruned-v2; do
   model=$([ $label = original ] && echo "$SRC" || echo outputs/models/flash-next-ja-en-coding-v2)
-  scripts/tf-serve.sh "$RUN/mixed-$label-server.log" "$model" \
-    sh -c 'python3 scripts/probe_replies.py "$TF_BASE" "$0/test-data" scripts/prompts/mixed-ja.json "$0/mixed-$1.jsonl"' "$RUN" $label
-  scripts/tf-serve.sh "$RUN/coding-$label-server.log" "$model" \
-    sh -c 'python3 scripts/probe_replies.py "$TF_BASE" "$0/test-data" scripts/prompts/mixed-ja-coding.json "$0/coding-$1.jsonl" 1000' "$RUN" $label
+  scripts/flash-next/serve.sh "$RUN/mixed-$label-server.log" "$model" \
+    sh -c 'python3 scripts/probe_replies.py "$TF_BASE" fn "$0/test-data" scripts/prompts/mixed-ja.json "$0/mixed-$1.jsonl"' "$RUN" $label
+  scripts/flash-next/serve.sh "$RUN/coding-$label-server.log" "$model" \
+    sh -c 'python3 scripts/probe_replies.py "$TF_BASE" fn "$0/test-data" scripts/prompts/mixed-ja-coding.json "$0/coding-$1.jsonl" 1000' "$RUN" $label
 done
 ```

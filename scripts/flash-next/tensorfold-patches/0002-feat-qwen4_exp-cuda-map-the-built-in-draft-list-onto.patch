@@ -1,0 +1,85 @@
+From 8afb41ba513a128f21d1dc38a76ae8869e79df03 Mon Sep 17 00:00:00 2001
+From: Nil <lue.gsk.2012@gmail.com>
+Date: Wed, 7 Oct 2026 07:58:03 +0900
+Subject: [PATCH 2/2] feat(qwen4_exp cuda): map the built-in draft list onto
+ pruned rows
+
+A vocabulary-pruned checkpoint now drafts over the built-in list carried
+through ple-token-ids.json instead of refusing it, so serving keeps its MTP
+drafts without a separate list. Pruned tokens drop out of the list.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011XiGQHTjzpMVa5sTqiQmg5
+---
+ src/tensorfold/families/qwen4_exp/cuda/weight_types.py | 8 ++++++++
+ src/tensorfold/families/qwen4_exp/cuda/weights.py      | 7 +++----
+ tests/test_flashnext_ple_token_ids.py                  | 7 ++++++-
+ 3 files changed, 17 insertions(+), 5 deletions(-)
+
+diff --git a/src/tensorfold/families/qwen4_exp/cuda/weight_types.py b/src/tensorfold/families/qwen4_exp/cuda/weight_types.py
+index c242c5e..305abd6 100644
+--- a/src/tensorfold/families/qwen4_exp/cuda/weight_types.py
++++ b/src/tensorfold/families/qwen4_exp/cuda/weight_types.py
+@@ -290,3 +290,11 @@ def draft_token_ids(draft_vocab: int | str | None) -> np.ndarray | None:
+         return np.arange(draft_vocab, dtype=np.int64)
+     source = Path(__file__).with_name("draft_vocab.txt") if draft_vocab == "default" else Path(draft_vocab)
+     return np.unique(np.loadtxt(source, dtype=np.int64).reshape(-1))
++
++
++def pruned_draft_ids(upstream: np.ndarray, ple_token_ids: np.ndarray) -> np.ndarray:
++    """The built-in draft list (upstream token ids) as a vocabulary-pruned checkpoint's rows; pruned tokens drop out."""
++
++    rows = np.searchsorted(ple_token_ids, upstream)
++    found = (rows < len(ple_token_ids)) & (ple_token_ids[np.minimum(rows, len(ple_token_ids) - 1)] == upstream)
++    return rows[found].astype(np.int64)
+diff --git a/src/tensorfold/families/qwen4_exp/cuda/weights.py b/src/tensorfold/families/qwen4_exp/cuda/weights.py
+index 5a28221..a426f60 100644
+--- a/src/tensorfold/families/qwen4_exp/cuda/weights.py
++++ b/src/tensorfold/families/qwen4_exp/cuda/weights.py
+@@ -14,7 +14,7 @@ from tensorfold.cuda import experts as grouped
+ from .qmm import Q4, dequantize, make_q4, stack_q4
+ from .reader import _DT, _Reader, _groups, _rows, _rows_at, norms_around_one  # noqa: F401
+ from .weight_types import (
+-    AttnW, Config, GDNW, HC, LayerW, MoEW, MTPW, PLEW, Weights, draft_token_ids, stop_ids)  # noqa: F401 (re-exported)
++    AttnW, Config, GDNW, HC, LayerW, MoEW, MTPW, PLEW, Weights, draft_token_ids, pruned_draft_ids, stop_ids)  # noqa: F401 (re-exported)
+ 
+ 
+ _PLAIN = (torch.bfloat16, torch.float16, torch.float32)
+@@ -417,10 +417,9 @@ def load(model_dir: str | Path, device: str = "cuda", *, mtp: bool = True, tp: t
+             del head_raw
+         # NVFP4: the draft head is the bf16 lm_head's draft rows requantized 4-bit at load (drafts only)
+         draft_head, draft_ids = None, None
+-        if draft_vocab == "default" and full.ple_token_ids is not None:
+-            raise ValueError("the built-in draft list holds upstream token ids; a vocabulary-pruned checkpoint needs its "
+-                             "own list (vocab-surgery translate-ids) or --draft-vocab N")
+         ids = draft_token_ids(draft_vocab)
++        if ids is not None and draft_vocab == "default" and full.ple_token_ids is not None:
++            ids = pruned_draft_ids(ids, full.ple_token_ids)
+         if ids is not None:
+             ids = np.array_split(ids[ids < full.vocab], world)[rank]
+             ids = torch.from_numpy(ids).to(device)
+diff --git a/tests/test_flashnext_ple_token_ids.py b/tests/test_flashnext_ple_token_ids.py
+index 7e0773c..b0c7f5e 100644
+--- a/tests/test_flashnext_ple_token_ids.py
++++ b/tests/test_flashnext_ple_token_ids.py
+@@ -7,7 +7,7 @@ import json
+ import numpy as np
+ import pytest
+ 
+-from tensorfold.families.qwen4_exp.cuda.weight_types import Config, ple_token_ids
++from tensorfold.families.qwen4_exp.cuda.weight_types import Config, ple_token_ids, pruned_draft_ids
+ 
+ 
+ def _write(tmp_path, vocab, eos, table=None):
+@@ -45,3 +45,8 @@ def test_table_must_match_the_rows(tmp_path):
+     with pytest.raises(ValueError):
+         ple_token_ids(tmp_path, 3)
+     assert ple_token_ids(tmp_path / "absent", 3) == (0, None)
++
++
++def test_builtin_draft_list_maps_to_pruned_rows():
++    kept = np.array([0, 3, 4, 7, 9])
++    assert pruned_draft_ids(np.array([0, 1, 4, 9, 11]), kept).tolist() == [0, 2, 4]
+-- 
+2.43.0
+

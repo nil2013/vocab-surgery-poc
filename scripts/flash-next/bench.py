@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Measure TTFT and decode speed through the OpenAI API, with and without MTP drafts (the per-request "draft" field).
+"""Measure TTFT and decode speed of a Flash-Next server, with and without MTP drafts (TensorFold's per-request "draft" field).
 
 Every request is recorded in order; the first trial of each prompt and mode is a warm-up and is left out of the summary.
-Usage: tf_bench.py <base url> <test-data dir> <new output.json>
+Usage: bench.py <base url> <test-data dir> <new output.json>
 """
 import json
 import statistics

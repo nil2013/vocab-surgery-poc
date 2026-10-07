@@ -2,8 +2,8 @@
 """Send a fixed set of prompts, each at temperature 0 and at 0.7 with seeds 1 and 2, and record the replies.
 
 Each reply is stored with its script-leak metrics from test-data: `novel` counts leak-class characters absent from the
-prompt, `copied` lists those taken from it. Requests are sent one at a time, so tf_acceptance.py can attribute them.
-Usage: probe_replies.py <base url> <test-data dir> <prompts.json> <new output.jsonl> [max_tokens]
+prompt, `copied` lists those taken from it. Requests are sent one at a time to any OpenAI-compatible server.
+Usage: probe_replies.py <base url> <model> <test-data dir> <prompts.json> <new output.jsonl> [max_tokens]
 """
 import json
 import sys
@@ -12,8 +12,9 @@ SETTINGS = [("t0", 0.0, None), ("t07s1", 0.7, 1), ("t07s2", 0.7, 2)]
 
 
 def main():
-    base, testdata, prompts_path, out = sys.argv[1:5]
-    max_tokens = int(sys.argv[5]) if len(sys.argv) > 5 else 600
+    base, model, testdata, prompts_path, out = sys.argv[1:6]
+    max_tokens = int(sys.argv[6]) if len(sys.argv) > 6 else 600
+    sys.dont_write_bytecode = True  # test-data may be the read-only submodule
     sys.path.insert(0, testdata + "/tools")
     from common import chat_stream, is_leak_char, script_metrics
     with open(prompts_path, encoding="utf-8") as stream:
@@ -21,7 +22,7 @@ def main():
     with open(out, "x", encoding="utf-8") as stream:
         for name, prompt in prompts.items():
             for tag, temperature, seed in SETTINGS:
-                body = {"model": "fn", "messages": [{"role": "user", "content": prompt}], "temperature": temperature,
+                body = {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": temperature,
                         "max_tokens": max_tokens, "chat_template_kwargs": {"enable_thinking": False}}
                 if seed is not None:
                     body["seed"] = seed

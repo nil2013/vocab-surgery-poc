@@ -100,33 +100,20 @@ helper はケースと hash、submodule revision、server・package情報、全�
 
 モデル切替直後に oMLX の dynamic memory ceiling が旧状況を参照して HTTP 507 を返す場合、明示 load を最大20秒、1秒間隔で再試行する。他の HTTP errors は再試行せず、memory guard の上限は変更しない。完了した baseline の後に失敗した場合は、新しい出力先で `--baseline-results <旧 comparison directory>` を指定できる。モデル・manifest hash・データ revision / hashes・server 情報・package versions・samples / trials / warmups が一致し、全 baseline 行の case / seed / group が揃っている場合だけコピーして再利用し、そのファイル hash と出所を記録する。部分 baseline は再利用しない。
 
-## 実験用 TensorFold clone での評価（Flash-Next）
+## 混在した入力への応答の記録
 
-Flash-Next は oMLX ではなく、`outputs/tensorfold` に clone して改造した TensorFold で serve する（[ロード検査](MODEL_FAMILIES.md#tensorfold-でのロード検査2026-10-07)）。本番の serve 環境とその venv は使わない。clone 内の `.venv` と `.torch-extensions` を使い、server は `127.0.0.1:18080`（`TF_PORT` で変更）で 1 本ずつ起動・停止する。
+[probe_replies.py](../scripts/probe_replies.py) は、OpenAI 互換の任意の server に固定の prompt 集合を temperature 0 と 0.7（seed 1、2）で 1 本ずつ送り、応答と test-data の混入指標を JSONL に保存する。prompt にある字を写したもの（`copied`）と、prompt にない混入（`novel`）を分けて記録する。生成 code は実行しない。
 
-```sh
-RUN=outputs/runs/fn-serve-eval
-scripts/tf-evaluate.sh "$RUN" original models/models--Vontra--Qwen3.8-Flash-Next-MLX-4bit-MTP/snapshots/2b170fa6309d5d1ee380b35636075fac7945f286
-scripts/tf-evaluate.sh "$RUN" pruned-v2 outputs/models/flash-next-ja-en-coding-v2
-python3 scripts/tf_acceptance.py "$RUN/pruned-v2-server.log" \
-  "$RUN/test-data/results/synthetic/pruned-v2/$(date +%F).json" "$RUN/pruned-v2-bench.json"
-```
-
-- [tf-serve.sh](../scripts/tf-serve.sh) は checkpoint を serve し、ready になってから任意のコマンドを `TF_BASE` 付きで実行して、終了時に server を止める。
-- [tf-evaluate.sh](../scripts/tf-evaluate.sh) は run directory に `test-data` の results 以外をコピーし、[testdata-no-exec.patch](../scripts/testdata-no-exec.patch) を当ててから、upstream の合成テスト（`--par 1`、`enable_thinking: false`）と [tf_bench.py](../scripts/tf_bench.py) を実行する。submodule は変更しない。
-- この host（DGX、AppArmor が unprivileged user namespace を禁止）には生成 code の sandbox がない。patch は code ケースのコードを記録するだけで実行せず、PASS を `null` にする。無制限実行には切り替えない。
-- `tf_bench.py` は日本語・英語・Python の 3 prompt を、MTP あり／なし（request の `draft`）で各 4 回、temperature 0、400 tokens で送る。最初の 1 回は warm-up として集計から除く。
-- [tf_acceptance.py](../scripts/tf_acceptance.py) は server log の `accepted=A/P` を、送った順の結果ファイルと completion tokens で照合して request に割り当て、ケースごとの MTP 受理率と 1 round あたりの token 数を出す。数が合わなければ停止する。
-
-[probe_replies.py](../scripts/probe_replies.py) は固定の prompt 集合を temperature 0 と 0.7（seed 1、2）で 1 本ずつ送り、応答と test-data の混入指標を JSONL に保存する。prompt にある字を写したもの（`copied`）と、prompt にない混入（`novel`）を分けて記録する。[mixed-ja.json](../scripts/prompts/mixed-ja.json) は日本語の一部を簡体字・ハングルに置き換えた依頼、[mixed-ja-coding.json](../scripts/prompts/mixed-ja-coding.json) は同じ置き換えをした簡単な Python の課題である。生成 code は実行しない。
+- [mixed-ja.json](../scripts/prompts/mixed-ja.json)：日本語の一部を簡体字・ハングルに置き換えた依頼
+- [mixed-ja-coding.json](../scripts/prompts/mixed-ja-coding.json)：同じ置き換えをした簡単な Python の課題
 
 ```sh
-scripts/tf-serve.sh "$RUN/coding-pruned-v2-server.log" outputs/models/flash-next-ja-en-coding-v2 \
-  sh -c 'python3 scripts/probe_replies.py "$TF_BASE" "$0/test-data" scripts/prompts/mixed-ja-coding.json "$0/coding-pruned-v2.jsonl" 1000' "$RUN"
-python3 scripts/tf_acceptance.py "$RUN/coding-pruned-v2-server.log" "$RUN/coding-pruned-v2.jsonl"
+python3 scripts/probe_replies.py http://127.0.0.1:8302/v1 <model> test-data scripts/prompts/mixed-ja.json "$RUN/mixed.jsonl"
 ```
 
-2026-10-07 に元モデルと `ja-en-coding-v2` 加工モデルをこの手順で比べた結果は、[Flash-Next の serve 比較](EVALUATION_FLASH_NEXT_20261007.md)にある。
+## Flash-Next
+
+Flash-Next は oMLX ではなく、実験用に改造した TensorFold で serve する。その取得・serve・評価の道具は Flash-Next 専用として [scripts/flash-next](../scripts/flash-next/README.md) にまとめてある。2026-10-07 の比較結果は [Flash-Next の serve 比較](EVALUATION_FLASH_NEXT_20261007.md)。
 
 ## 2026-10-06 の実行確認
 

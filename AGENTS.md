@@ -8,6 +8,7 @@ Purpose: vocabulary and embedding / LM-head pruning of MLX safetensors checkpoin
 - Use [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) for loader, data representation, diagnostic, or binary I/O changes.
 - Use [docs/DOMAIN.md](docs/DOMAIN.md) for Unicode / kanji policy, BPE cleanup, projection, token-reference schemas, or pure model-update plans.
 - Use [docs/MODEL_FAMILIES.md](docs/MODEL_FAMILIES.md) when adding or changing a model family, tokenizer scheme, row encoding, or filesystem transfer. Do not add model-name branches to shared operations.
+- Keep tools that serve or evaluate one specific model under `scripts/<model>/` with its own README (Flash-Next: [scripts/flash-next](scripts/flash-next/README.md)); the top level of `scripts/` holds model-independent helpers only.
 - Use [docs/PROCESSING.md](docs/PROCESSING.md) for saved plans, input inventories, output boundaries, staging, publication, or full checkpoint verification.
 - Use [docs/EVALUATION.md](docs/EVALUATION.md) for oMLX helpers, fixed suites, metrics, code execution, or evaluation conclusions. Keep a failed logits gate and pending human ratings visible; do not infer TASK completion from a successful command.
 - Use [test-data/docs/cases.md](test-data/docs/cases.md) and [test-data/docs/metrics.md](test-data/docs/metrics.md) when changing replay / synthetic case adapters or interpreting their scores.

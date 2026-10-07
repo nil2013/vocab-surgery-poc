@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Attribute the experimental server's per-request MTP statistics to the requests that produced them.
+"""Attribute the experimental TensorFold server's per-request MTP statistics to the requests that produced them.
 
 The server logs one `done req-… tokens=N … rounds=R accepted=A/P` line per request. Requests must have been sent one at a
-time; the result files are given in the order they were sent (synthetic results JSON, tf_bench.py JSON, probe_replies.py JSONL) and
+time; the result files are given in the order they were sent (synthetic results JSON, bench.py JSON, scripts/probe_replies.py JSONL) and
 every request's completion-token count must match its log line.
-Usage: tf_acceptance.py <server log> <result file>... [--json <new output.json>]
+Usage: acceptance.py <server log> <result file>... [--json <new output.json>]
 """
 import argparse
 import json
