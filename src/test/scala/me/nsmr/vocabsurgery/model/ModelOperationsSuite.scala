@@ -173,3 +173,40 @@ class ModelOperationsSuite extends munit.FunSuite:
     val packed = DomainFixtures.snapshot()
     intercept[DomainException](ModelOperations.plan(packed.copy(config = packed.config.copy(quantization = None)), DomainFixtures.policy))
   }
+
+  for (modelType, unquantized) <- Vector("qwen3_5" -> false, "qwen3_5_moe" -> false, "qwen3_5_moe" -> true) do
+    test(s"Qwen3.5 $modelType dense=$unquantized projects vocabulary and rewrites every nested ID without PLE") {
+      val source = DomainFixtures.qwen35(modelType, unquantized)
+      val plan = ModelOperations.plan(source, DomainFixtures.policy)
+      assertEquals(ModelFamily.of(source.config.original), Qwen35)
+      assertEquals(plan.family, Qwen35)
+      assertEquals(plan.removedRows, 4)
+      assertEquals(plan.modules.map(_.encoding), if unquantized then Vector.fill(2)(RowEncoding.Dense)
+        else Vector.fill(2)(RowEncoding.AffineQuantized(QuantizationSpec(8, 4, "affine"))))
+      assertEquals(plan.savedPayloadBytes.longValue, plan.removedRows * 32L)
+      assertEquals(plan.modules.flatMap(_.tensors).size, if unquantized then 2 else 6)
+      val config = plan.json("config.json")
+      assertEquals(config.hcursor.get[String]("model_type"), Right(modelType))
+      assertEquals(config.hcursor.downField("text_config").get[Int]("vocab_size"), Right(plan.projection.compactSize))
+      val before = TokenReferences.required(source.config.original, Qwen35.tokenIdScopes, Qwen35.tokenIdFields)
+      val after = TokenReferences.required(config, Qwen35.tokenIdScopes, Qwen35.tokenIdFields)
+      assertEquals(after, before.map((at, id) => at -> OriginalTokenId(plan.projection.requireCompact(id).intValue)))
+      assertEquals(config.hcursor.downField("quantization").focus, source.config.original.hcursor.downField("quantization").focus)
+      assertEquals(config.hcursor.downField("quantization_config").focus, source.config.original.hcursor.downField("quantization_config").focus)
+      assert(!plan.outputFiles.exists(_.name == PleTokenIds.FileName))
+      assertEquals(plan.json("vocab.json"), plan.json("tokenizer.json").hcursor.downField("model").downField("vocab").focus.get)
+      assert(source.tokenizer.addedTokens.forall(t => plan.projection.compact(t.id).isDefined))
+    }
+
+  test("Qwen3.5 rejects shared embeddings, dedicated MTP embeddings and unscoped modality IDs") {
+    val source = DomainFixtures.qwen35()
+    for path <- Vector(JsonPath("tie_word_embeddings"), JsonPath("text_config", "tie_word_embeddings"),
+      JsonPath("text_config", "mtp_use_dedicated_embeddings")) do
+      val changed = source.copy(config = source.config.copy(original = path.modify(source.config.original)(_ => Json.True)))
+      assert(intercept[DomainException](ModelOperations.plan(changed, DomainFixtures.policy)).getMessage.contains(path.text))
+    val unscoped = source.config.original.mapObject(fields => fields.add("vision_config",
+      fields("vision_config").get.mapObject(_.add("image_token_id", Json.fromInt(0)))))
+    assert(intercept[DomainException](ModelOperations.plan(source.copy(config = source.config.copy(original = unscoped)),
+      DomainFixtures.policy)).getMessage.contains("token-ID field outside"))
+    intercept[DomainException](ModelFamily.of(Json.obj("model_type" -> Json.fromString("qwen3"))))
+  }

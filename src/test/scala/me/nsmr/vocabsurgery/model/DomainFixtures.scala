@@ -25,9 +25,9 @@ object DomainFixtures:
     build(config, tokenizer, generation, Json.obj("eos_token" -> Json.fromString("<|im_end|>")), Vector("model.embed_tokens", "lm_head"), Map.empty, Map.empty)
 
   /** Flash-Next layout: nested `text_config`, vision token IDs, `language_model.*` modules, a PLE layer and slow tokenizer files. */
-  def flashNext(): ModelSnapshot =
+  def flashNext(extraTokens: Vector[String] = Vector.empty): ModelSnapshot =
     val tokenizer = TokenizerFixtures.create(Vector("ab", foreign), Vector(BpeMerge("a", "b"), BpeMerge(foreign.take(1), foreign.drop(1))),
-      (FlashNext.requiredTokens + "<|image_pad|>").toVector.sorted)
+      (FlashNext.requiredTokens ++ extraTokens + "<|image_pad|>").toVector.sorted)
     val rows = TokenizerFixtures.rows(tokenizer) + 3
     def id(content: String) = Json.fromInt(TokenizerFixtures.id(tokenizer, content).intValue)
     val eos = id("<|im_end|>")
@@ -47,6 +47,28 @@ object DomainFixtures:
     build(config, tokenizer, Json.obj("eos_token_id" -> Json.arr(eos)), tokenizerConfig,
       Vector("language_model.model.embed_tokens", "language_model.lm_head"), Map("vocab.json" -> vocab, "merges.txt" -> merges), Map.empty)
 
+  /** Qwen3.8-27B / Ornith: the nested Qwen3.5 layout without Flash-Next's PLE tables. */
+  def qwen35(modelType: String = "qwen3_5", unquantized: Boolean = false): ModelSnapshot =
+    val source = flashNext(Vector("<|video_pad|>", "<|vision_start|>", "<|vision_end|>"))
+    val quantized = quantization.mapObject(_.add("bits", Json.fromInt(8)))
+    val configJson = source.config.original.mapObject(fields => fields
+      .add("model_type", Json.fromString(modelType))
+      .add("video_token_id", Json.fromInt(TokenizerFixtures.id(source.tokenizer, "<|video_pad|>").intValue))
+      .add("vision_start_token_id", Json.fromInt(TokenizerFixtures.id(source.tokenizer, "<|vision_start|>").intValue))
+      .add("vision_end_token_id", Json.fromInt(TokenizerFixtures.id(source.tokenizer, "<|vision_end|>").intValue))
+      .add("quantization", quantized).add("quantization_config", quantized)
+      .add("text_config", fields("text_config").get.mapObject(_.remove("ple_layer_ids")
+        .add("model_type", Json.fromString(s"${modelType}_text")))))
+    val config = source.config.copy(family = Qwen35, original = configJson,
+      quantization = Some(QuantizationConfig(QuantizationSpec(8, 4, "affine"), Map.empty)))
+    val nested = build(config, source.tokenizer, source.generation, source.tokenizerConfig,
+      Vector("language_model.model.embed_tokens", "language_model.lm_head"), source.tokenizerCompanions, Map.empty)
+    if unquantized then
+      val dense = DomainFixtures.dense(DomainFixtures.dense(nested, "language_model.model.embed_tokens"), "language_model.lm_head")
+      dense.copy(config = dense.config.copy(quantization = None,
+        original = dense.config.original.mapObject(_.remove("quantization").remove("quantization_config"))))
+    else nested
+
   private def build(config: ModelConfig, tokenizer: TokenizerData, generation: Json, tokenizerConfig: Json, modules: Vector[String],
       companions: Map[String, String], familyFiles: Map[String, Json]): ModelSnapshot =
     val rows = config.vocabSize.toLong
@@ -58,7 +80,7 @@ object DomainFixtures:
       value
     val tensors = Vector(tensor("body", TensorDType.U8, Vector(3L))) ++
       modules.flatMap { module => Vector(
-        tensor(s"$module.weight", TensorDType.U32, Vector(rows, 1L)),
+        tensor(s"$module.weight", TensorDType.U32, Vector(rows, (config.hiddenSize / (32 / config.quantization.get.default.bits)).toLong)),
         tensor(s"$module.scales", TensorDType.BF16, Vector(rows, 2L)),
         tensor(s"$module.biases", TensorDType.BF16, Vector(rows, 2L))) }
     val header = Json.obj((Vector("__metadata__" -> Json.obj("format" -> Json.fromString("mlx"))) ++ tensors.map(t => t.name -> Json.obj(

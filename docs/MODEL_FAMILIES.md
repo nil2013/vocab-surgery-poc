@@ -6,7 +6,7 @@
 
 | 境界 | 型 | 実装 | 何を決めるか |
 | --- | --- | --- | --- |
-| モデル系列 | `model.ModelFamily` | `CoderNext`、`FlashNext` | config の寸法の位置、token ID を持つ object、語彙行を持つ module、必須 protocol token、系列固有の出力ファイル |
+| モデル系列 | `model.ModelFamily` | `CoderNext`、`FlashNext`、`Qwen35` | config の寸法の位置、token ID を持つ object、語彙行を持つ module、必須 protocol token、系列固有の出力ファイル |
 | tokenizer の key 表現 | `tokenizer.TokenizerScheme` | `ByteLevelBpe` | key から byte 列への復元、基礎 key、構造の検査、`vocab.json`／`merges.txt` 等の付随ファイル |
 | 行の格納形式 | `model.RowEncoding` | `Dense`、`AffineQuantized` | 各 module の tensor 構成と列数の検査。行は格納されたまま複製する |
 | pruning 戦略 | `tokenizer.PruningPolicy`、`processing.PolicyKind` | `CharacterPolicy`（kind `characters`） | どの token を削除・保護するか、参照入力とその指紋、policy 固有のレポート |
@@ -22,6 +22,22 @@
 - `vocabularyModules`：axis 0 が語彙の module の tensor 名 prefix。共有 embedding など未対応の構成はここで拒否する。
 - `requiredTokens`：単一 ID として残す必要がある protocol token。tokenizer config と chat template から集める token に追加される。
 - `familyFileNames`／`familyFiles`：系列が出力に書く JSON ファイル。source にあれば読み、なければ新規に作る。
+
+### Qwen3.8-27B と Ornith
+
+`Qwen35` は `model_type=qwen3_5`／`qwen3_5_moe` を受け付ける。Qwen3.8-27B は名称とは異なり `qwen3_5`、Ornith-1.5-35B-A3B は `qwen3_5_moe` を config に保持している。モデル名や量子化の有無で共通処理を分岐させない。
+
+寸法は `text_config.vocab_size`／`hidden_size`、語彙 modules は `language_model.model.embed_tokens` と `language_model.lm_head`。config の直下、`text_config`、埋め込みの `generation_config` にある token ID と、image／video／vision start／vision end の ID を保護・再採番する。共有 embedding と MTP 専用 embedding は受け付けない。tokenizer は既存 `ByteLevelBpe`、重みは既存の `Dense`／`AffineQuantized` を使う。Flash-Next の PLE 対応表は出力しない。
+
+2026-10-10 に次の実 snapshot を、既存 `ja-en-coding-v2`／`v3` の両方で検証した。`LocalSnapshotSuite` 6 件は、全 shard headers、対象 tensor の行数、ID 再採番、参照 tokenizer の NFC 10,086 字と round trip を確認して通過した。合成 fixture では 3 構成すべての保存計画・適用・全 tensor byte 照合・再検証・再計画を確認した。実重みの適用・全 payload hash・推論品質・速度は未検証で、v4 は Unihan／JMdict 未取得のため未実施。
+
+| 入力 | Snapshot revision | v2 行数／削減 bytes | v3 行数／削減 bytes |
+| --- | --- | --- | --- |
+| `mlx-community/Qwen3.8-27B-8bit` | `815b83c0df8ffd1d1b5244cf75fd6ef14fca9ef9` | 181,103／731,320,960 | 179,955／743,811,200 |
+| `ornith-ai/Ornith-1.5-35B-A3B-MLX`（BF16） | `1713baf2e38984a3c557195caf167759144d1d7e` | 181,103／550,641,664 | 179,955／560,046,080 |
+| `ornith-ai/Ornith-1.5-35B-A3B-MLX-8bit` | `02440c39bdf7365c494a7f55f2a8b104ba87562f` | 181,103／292,528,384 | 179,955／297,524,480 |
+
+元の行数はいずれも 248,320。削減 bytes は payload の計画値で、ファイルの header サイズや実推論 memory の削減値とは区別する。
 
 ### Flash-Next 固有の出力
 
@@ -50,6 +66,7 @@ MTP の draft 語彙リストは加工後の ID 空間で指定する必要が�
 | --- | --- | --- | --- |
 | Coder-Next | `DomainFixtures.snapshot` | この DGX に snapshot がないため未実施 | 未実施 |
 | Flash-Next | `DomainFixtures.flashNext` | MLX 4bit MTP 版（`2b170fa6`）で実施 | 下記 |
+| Qwen3.5 dense／MoE | `DomainFixtures.qwen35`（8bit／BF16） | 上記 3 snapshots、v2／v3 で実施 | 合成 fixture のみ。実重みは未実施 |
 
 ### Flash-Next の適用記録（2026-10-07、DGX Spark、ext4）
 

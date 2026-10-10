@@ -346,6 +346,27 @@ class ProcessingSuite extends munit.FunSuite:
     }
   }
 
+  for (modelType, unquantized) <- Vector("qwen3_5" -> false, "qwen3_5_moe" -> false, "qwen3_5_moe" -> true) do
+    test(s"Qwen3.5 $modelType dense=$unquantized persists, applies, verifies and replans without family sidecars") {
+      ProcessingFixtures.withSnapshot(DomainFixtures.qwen35(modelType, unquantized)) { (_, input, output) =>
+        val options = ProcessingOptions(outputRoot = output, transfer = FileTransfer.copying(FileTransfer.platform))
+        val path = CheckpointProcessor.plan(input, default, output.resolve("runs/qwen35"), options)
+        val prepared = PlanStore.loadVerified(path)
+        assertEquals(prepared.domain.family, me.nsmr.vocabsurgery.model.Qwen35)
+        val model = CheckpointProcessor.applyPlan(path, output.resolve("models/qwen35"), ProcessingFixtures.reference, options)
+        val loaded = SnapshotLoader.load(model)
+        assertEquals(loaded.config.family, me.nsmr.vocabsurgery.model.Qwen35)
+        assertEquals(loaded.config.vocabSize, prepared.domain.projection.compactSize)
+        assertEquals(loaded.config.quantization, SnapshotLoader.load(input).config.quantization)
+        assert(!Files.exists(model.resolve("ple-token-ids.json")))
+        val manifest = path.getParent.resolve("manifest.json")
+        assertEquals(JsonIO.read(manifest).hcursor.get[String]("family"), Right("qwen35"))
+        CheckpointProcessor.verifyManifest(manifest, ProcessingFixtures.reference, options)
+        val again = CheckpointProcessor.plan(model, default, output.resolve("runs/again"), options)
+        assertEquals(PlanStore.loadVerified(again).domain.removedRows, 0)
+      }
+    }
+
   test("publication refuses a target created after staging, and copying keeps the base publication") {
     ProcessingFixtures.withModel { (_, input, output) =>
       Files.createDirectories(output.resolve("stage"))

@@ -1,6 +1,6 @@
 # vocab surgery
 
-MLX safetensors モデルの不要な vocabulary と対応する embedding／LM head の行を削減する Scala プロジェクト。ビルドは sbt、package は `me.nsmr.vocabsurgery` を使用する。対応するモデル系列は Qwen3-Coder-Next と Qwen3.8-Flash-Next で、系列ごとの差は [モデル系列と拡張境界](docs/MODEL_FAMILIES.md) に記述した `ModelFamily` 等の実装に閉じる。
+MLX safetensors モデルの不要な vocabulary と対応する embedding／LM head の行を削減する Scala プロジェクト。ビルドは sbt、package は `me.nsmr.vocabsurgery` を使用する。対応するモデル系列は Qwen3-Coder-Next、Qwen3.8-Flash-Next、Qwen3.5 の dense／MoE 構成（Qwen3.8-27B、Ornith-1.5-35B-A3B を含む）で、系列ごとの差は [モデル系列と拡張境界](docs/MODEL_FAMILIES.md) に記述した `ModelFamily` 等の実装に閉じる。
 
 インフラ層、ドメイン操作、checkpoint の加工・検証機構、CLI と評価 helper を実装している。モデル全体を JVM に展開せず、語彙行を持つ tensors を共通の行順序で加工し、全 tensor の byte 一致と参照 tokenizer を検証してから新しいモデルを公開する。oMLX での before／after 評価は Coder-Next について独立して実行できる。
 

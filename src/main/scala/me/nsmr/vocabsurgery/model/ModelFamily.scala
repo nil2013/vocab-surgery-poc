@@ -62,7 +62,7 @@ trait ModelFamily:
   def familyFiles(config: Json, sourceFiles: Map[String, Json], projection: VocabularyProjection): Vector[OutputFile] = Vector.empty
 
 object ModelFamily:
-  val all: Vector[ModelFamily] = Vector(CoderNext, FlashNext)
+  val all: Vector[ModelFamily] = Vector(CoderNext, FlashNext, Qwen35)
 
   def of(config: Json): ModelFamily =
     all.filter(_.accepts(config)) match
